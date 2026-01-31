@@ -59,6 +59,75 @@ load_dotenv(override=False)
 console = Console()
 VERSION = "2.0.0"
 
+def _sheet_url(sheet_id: str) -> str:
+    sid = (sheet_id or "").strip()
+    if not sid:
+        return ""
+    return f"https://docs.google.com/spreadsheets/d/{sid}/edit"
+
+def _print_sheet_context(logger: "Logger"):
+    try:
+        url = _sheet_url(Config.SHEET_ID)
+        if url:
+            logger.info(f"📎 Google Sheet: {url}")
+    except Exception:
+        pass
+
+def run_logs_mode():
+    logger = Logger("logs")
+    logger.info("=" * 70)
+    logger.info(f"DamaDam Bot V{VERSION} - LOGS")
+    logger.info("=" * 70)
+
+    try:
+        logger.info(f"📁 Log folder: {Config.LOG_DIR.resolve()}")
+        try:
+            files = sorted(Config.LOG_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+        except Exception:
+            files = []
+
+        if files:
+            logger.info("\nRecent local log files:")
+            for p in files[:10]:
+                try:
+                    ts = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    ts = ""
+                logger.info(f"- {p.name} ({ts})")
+        else:
+            logger.info("No local log files found.")
+
+        sheets_mgr = SheetsManager(logger)
+        if not sheets_mgr.connect():
+            logger.warning("Sheets not available (cannot show ActivityLog/ConversationLog)")
+            return
+
+        _print_sheet_context(logger)
+
+        def _tail_sheet(sheet_name: str, limit: int = 20) -> None:
+            sh = sheets_mgr.get_sheet(Config.SHEET_ID, sheet_name, create_if_missing=False)
+            if not sh:
+                logger.warning(f"Sheet not found: {sheet_name}")
+                return
+            sheets_mgr.api_calls += 1
+            rows = sh.get_all_values()
+            if not rows or len(rows) <= 1:
+                logger.info(f"{sheet_name}: (empty)")
+                return
+
+            hdr = rows[0]
+            body = rows[1:]
+            tail = body[-limit:]
+            logger.info(f"\n{sheet_name} (last {min(limit, len(body))} rows)")
+            logger.info(" | ".join([(h or "").strip() for h in hdr]))
+            for r in tail:
+                logger.info(" | ".join([(c or "").strip() for c in r]))
+
+        _tail_sheet("ActivityLog", limit=20)
+        _tail_sheet("ConversationLog", limit=20)
+    finally:
+        logger.info(f"\n📝 Log: {logger.log_file}")
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -2593,6 +2662,7 @@ class InboxMonitor:
 def run_message_mode(args):
     """Phase 1: Send personal messages to targets"""
     logger = Logger("msg")
+    _print_sheet_context(logger)
     logger.info("=" * 70)
     logger.info(f"DamaDam Bot V{VERSION} - MESSAGE MODE")
     logger.info("=" * 70 + "\n")
@@ -2977,6 +3047,7 @@ def run_message_mode(args):
 def run_populate_mode(args):
     """Populate PostQueue from Rekhta shayari-image listing."""
     logger = Logger("populate")
+    _print_sheet_context(logger)
     try:
         console.print(
             Panel.fit(
@@ -2999,6 +3070,9 @@ def run_populate_mode(args):
         sheets_mgr = SheetsManager(logger)
         if not sheets_mgr.connect():
             return
+
+        activity = ActivityLogger(sheets_mgr, logger)
+        activity.initialize()
 
         post_queue = sheets_mgr.get_sheet(Config.SHEET_ID, "PostQueue")
         if not post_queue:
@@ -3090,10 +3164,32 @@ def run_populate_mode(args):
                     source_url = (item.get("image_url") or "").strip()
                     if not source_url or not pop._is_http_url(source_url):
                         skipped += 1
+                        try:
+                            activity.log(
+                                mode="populate",
+                                action="skip_invalid_source_url",
+                                nick="",
+                                url=source_url,
+                                status="skipped",
+                                details="invalid listing url"
+                            )
+                        except Exception:
+                            pass
                         continue
                     src_key = source_url.lower()
                     if src_key in seen_links:
                         skipped += 1
+                        try:
+                            activity.log(
+                                mode="populate",
+                                action="skip_duplicate",
+                                nick="",
+                                url=source_url,
+                                status="skipped",
+                                details="duplicate"
+                            )
+                        except Exception:
+                            pass
                         continue
 
                     try:
@@ -3101,6 +3197,17 @@ def run_populate_mode(args):
                         time.sleep(2)
                     except Exception:
                         skipped += 1
+                        try:
+                            activity.log(
+                                mode="populate",
+                                action="open_source_failed",
+                                nick="",
+                                url=source_url,
+                                status="failed",
+                                details="driver.get failed"
+                            )
+                        except Exception:
+                            pass
                         continue
 
                     payload = pop._extract_rekhta_image_payload()
@@ -3119,6 +3226,17 @@ def run_populate_mode(args):
                     if preview_only:
                         added += 1
                         seen_links.add(src_key)
+                        try:
+                            activity.log(
+                                mode="populate",
+                                action="preview_item",
+                                nick="",
+                                url=source_url,
+                                status="preview",
+                                details=f"title={(title or '')[:120]}; poet={(poet or '')[:120]}"
+                            )
+                        except Exception:
+                            pass
                         if limit > 0 and added >= limit:
                             break
                         continue
@@ -3144,6 +3262,17 @@ def run_populate_mode(args):
                     sheets_mgr.append_row(post_queue, row)
                     seen_links.add(src_key)
                     added += 1
+                    try:
+                        activity.log(
+                            mode="populate",
+                            action="add_postqueue_row",
+                            nick="",
+                            url=source_url,
+                            status="added",
+                            details=f"img={(img_url or '')[:120]}; title={(title or '')[:120]}; poet={(poet or '')[:120]}"
+                        )
+                    except Exception:
+                        pass
                     if limit > 0 and added >= limit:
                         break
             except KeyboardInterrupt:
@@ -3170,6 +3299,7 @@ def run_populate_mode(args):
 def run_post_mode(args):
     """Phase 2: Create new posts (text/image)"""
     logger = Logger("post")
+    _print_sheet_context(logger)
     try:
         console.print(
             Panel.fit(
@@ -3560,6 +3690,7 @@ def run_post_mode(args):
 def run_inbox_mode(args):
     """Phase 3: Monitor inbox and send replies"""
     logger = Logger("inbox")
+    _print_sheet_context(logger)
     logger.info("=" * 70)
     logger.info(f"DamaDam Bot V{VERSION} - INBOX MODE")
     logger.info("=" * 70 + "\n")
@@ -3750,7 +3881,7 @@ def main():
 
     parser.add_argument(
         "--mode",
-        choices=["msg", "populate", "post", "inbox"],
+        choices=["msg", "populate", "post", "inbox", "logs"],
         default=None,
         help="Operation mode"
     )
@@ -3891,7 +4022,7 @@ def main():
         elif args.mode == "inbox":
             run_inbox_mode(args)
         elif args.mode == "logs":
-            console.print(str(Config.LOG_DIR.resolve()))
+            run_logs_mode()
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted[/yellow]")
     except Exception as e:
