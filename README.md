@@ -1,6 +1,6 @@
 # DamaDam Bot V2.0 - Complete Documentation
 
-## 🎯 Overview
+## Overview
 
 Clean, modular, multi-mode automation bot for DamaDam.pk with three complete modes:
 
@@ -77,6 +77,9 @@ DD_DEBUG=0
 DD_MAX_PROFILES=0
 DD_MAX_POST_PAGES=4
 DD_AUTO_PUSH=0
+
+# Optional: Auto-populate IMG_LINK in PostQueue from POST_LINK
+DD_POPULATE_IMG_LINKS=0
 ```
 
 ## Google Sheets Structure
@@ -104,33 +107,25 @@ url  | Sara | https://damadam.pk/comments/text/12345 |  |  |  | Hi there! | pend
 
 ### Sheet 2: PostQueue (Create Posts)
 
-Example rows:
+Example (current layout):
 
 ```text
-TYPE  | CONTENT | IMAGE_PATH       | STATUS  | POST_URL | TIMESTAMP | NOTES
-text  | This is my content... |  | pending |  |  | 
-image | My caption | C:\images\pic.jpg | pending |  |  | 
+TITLE_EN | TITLE_UR | IMG_LINK | POST_LINK | RELATED | TYPE | STATUS | POST_URL | TIMESTAMP | NOTES | BY | POST_LINK | PREVIEW
 ```
 
-**Columns:**
+**Key columns used by the bot:**
 
 - **TYPE**: `text` or `image`
-- **CONTENT**: Text content (for text posts) / caption (for image posts)
-- **IMAGE_PATH**: Full path to image file (for image posts)
 - **STATUS**: `pending` → `Done/Failed`
-- **POST_URL**: Created post URL
-- **TIMESTAMP**: Creation time
-- **NOTES**: Status/errors
-
-Compatibility:
-
-- If your existing sheet still has `TITLE` and `TAGS` columns (older layout), the bot will still work.
-
-Image posts:
-
-- **Caption**: Uses `CONTENT` (caption textarea on DamaDam).
-- **Expiry**: Defaults to `Never expire post`.
-- **Turn Off Replies**: Defaults to `Yes`.
+- **IMG_LINK**:
+  - For image posts: direct image URL (or local path)
+  - Can be auto-filled by the bot from **POST_LINK**
+- **POST_LINK**: source page URL (used only for auto-filling IMG_LINK)
+- **TITLE_EN**:
+  - If TYPE=`text`: used as the post content
+  - If TYPE=`image`: used as the post title (if supported by DamaDam form)
+- **TITLE_UR**: if TYPE=`image`, used as image caption
+- **POST_URL / TIMESTAMP / NOTES**: output columns written by the bot after posting
 
 ### Sheet 3: InboxQueue (Inbox Replies)
 
@@ -157,6 +152,23 @@ TIMESTAMP | NICK | NAME | MESSAGE | POST_URL | STATUS | RESULT_URL
 ```
 
 ## Usage
+
+### Interactive Menu (Recommended)
+
+Run without arguments:
+
+```bash
+python main.py
+```
+
+You can choose:
+
+- **1** Message Mode
+- **2** Post Mode
+- **3** Inbox Mode
+- **4** Populate IMG_LINK (PostQueue)
+
+Then enter `0` to process all rows, or a number to limit.
 
 ### MSG Mode (Send Personal Messages)
 
@@ -189,6 +201,9 @@ python main.py --mode post
 
 # Limit to 5 posts
 python main.py --mode post --max-profiles 5
+
+# Populate IMG_LINK from POST_LINK first (when IMG_LINK is empty)
+python main.py --mode post --populate-img-links
 ```
 
 **How it works:**

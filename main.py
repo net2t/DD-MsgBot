@@ -89,6 +89,8 @@ class Config:
     POST_RETRY_FAILED = os.getenv("DD_POST_RETRY_FAILED", "1") == "1"
     POST_MAX_ATTEMPTS = int(os.getenv("DD_POST_MAX_ATTEMPTS", "3") or "3")
 
+    POPULATE_IMG_LINKS = os.getenv("DD_POPULATE_IMG_LINKS", "0") == "1"
+
     POST_DENIED_RETRIES = int(os.getenv("DD_POST_DENIED_RETRIES", "1") or "1")
     POST_DENIED_BACKOFF_SECONDS = int(os.getenv("DD_POST_DENIED_BACKOFF_SECONDS", "600") or "600")
 
@@ -1268,6 +1270,85 @@ class PostCreator:
         except Exception:
             return False
 
+
+class PostQueueLinkPopulator:
+    def __init__(self, driver, logger: Logger):
+        self.driver = driver
+        self.logger = logger
+
+    def _extract_image_url(self) -> str:
+        try:
+            meta = self.driver.find_elements(By.XPATH, "//meta[@property='og:image']")
+            if meta:
+                url = (meta[0].get_attribute("content") or "").strip()
+                if url:
+                    return url
+        except Exception:
+            pass
+
+        selectors = [
+            "div.sherContent img",
+            "img[alt*='sher']",
+            "img[src*='rekhta']",
+            "img",
+        ]
+        for sel in selectors:
+            try:
+                imgs = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                for img in imgs[:10]:
+                    src = (img.get_attribute("src") or "").strip()
+                    if src.startswith("http"):
+                        return src
+            except Exception:
+                continue
+        return ""
+
+    def populate(self, sheet, header_map: Dict[str, int], max_rows: int = 0) -> int:
+        if not self.driver:
+            return 0
+
+        src_col_idx = None
+        tgt_col_idx = None
+        for k, v in header_map.items():
+            if k in {"POST_LINK", "SOURCE_URL", "SOURCE", "POST_LINK_", "POST LIN"}:
+                src_col_idx = v + 1
+            if k in {"IMG_LINK", "IMAGE_PATH", "IMAGE", "IMAGE_URL"}:
+                tgt_col_idx = v + 1
+
+        if not src_col_idx:
+            self.logger.warning("PostQueue populate skipped: source column (POST_LINK) not found")
+            return 0
+        if not tgt_col_idx:
+            self.logger.warning("PostQueue populate skipped: target column (IMG_LINK) not found")
+            return 0
+
+        values = sheet.get_all_values()
+        updated = 0
+        for r_i, row in enumerate(values[1:], start=2):
+            if max_rows and updated >= max_rows:
+                break
+
+            source_url = (row[src_col_idx - 1] if len(row) >= src_col_idx else "").strip()
+            current_target = (row[tgt_col_idx - 1] if len(row) >= tgt_col_idx else "").strip()
+            if not source_url or current_target:
+                continue
+
+            try:
+                self.logger.debug(f"Populate IMG_LINK row={r_i}")
+                self.driver.get(source_url)
+                time.sleep(2)
+                img_url = self._extract_image_url()
+                if img_url:
+                    sheet.update_cell(r_i, tgt_col_idx, img_url)
+                    updated += 1
+                else:
+                    sheet.update_cell(r_i, tgt_col_idx, "IMAGE_NOT_FOUND")
+                    updated += 1
+                time.sleep(1)
+            except Exception as e:
+                self.logger.warning(f"Populate IMG_LINK failed row={r_i}: {str(e)[:120]}")
+        return updated
+
     @staticmethod
     def _guess_suffix(url: str, content_type: str) -> str:
         try:
@@ -2287,6 +2368,17 @@ def run_post_mode(args):
             if key and key not in header_map:
                 header_map[key] = idx
 
+        if getattr(args, "populate_img_links", False) or Config.POPULATE_IMG_LINKS:
+            try:
+                pop = PostQueueLinkPopulator(driver, logger)
+                n = pop.populate(post_queue, header_map)
+                if n:
+                    logger.info(f"Updated IMG_LINK for {n} rows")
+                    sheets_mgr.api_calls += 1
+                    all_rows = post_queue.get_all_values()
+            except Exception as e:
+                logger.warning(f"IMG_LINK population skipped: {str(e)[:120]}")
+
         use_headers = bool(header_map)
 
         def get_cell(row: List[str], key: str) -> str:
@@ -2805,7 +2897,7 @@ def main():
     parser.add_argument(
         "--mode",
         choices=["msg", "post", "inbox"],
-        default="msg",
+        default=None,
         help="Operation mode"
     )
 
@@ -2816,10 +2908,78 @@ def main():
         help="Max targets to process"
     )
 
+    parser.add_argument(
+        "--populate-img-links",
+        action="store_true",
+        help="Populate PostQueue IMG_LINK from POST_LINK when IMG_LINK is empty"
+    )
+
+    parser.add_argument(
+        "--no-menu",
+        action="store_true",
+        help="Disable interactive menu and use defaults"
+    )
+
     args = parser.parse_args()
 
+    def _prompt_int(prompt: str, default: int) -> int:
+        try:
+            raw = input(prompt).strip()
+        except Exception:
+            raw = ""
+        if not raw:
+            return default
+        try:
+            return int(raw)
+        except Exception:
+            return default
+
+    def _prompt_choice(prompt: str, choices: Dict[str, str], default_key: str) -> str:
+        try:
+            raw = input(prompt).strip()
+        except Exception:
+            raw = ""
+        if not raw:
+            raw = default_key
+        return choices.get(raw, choices.get(default_key))
+
+    # If mode not provided, show interactive menu (unless disabled)
+    if not args.no_menu and not args.mode:
+        console.print("\nSelect mode:")
+        console.print("  1) Message Mode")
+        console.print("  2) Post Mode")
+        console.print("  3) Inbox Mode")
+        console.print("  4) Populate IMG_LINK (PostQueue)")
+
+        mode_map = {"1": "msg", "2": "post", "3": "inbox", "4": "populate"}
+        selected = _prompt_choice("Enter choice [1]: ", mode_map, "1")
+        if selected == "populate":
+            args.mode = "post"
+            args.populate_img_links = True
+            args.max_profiles = 0
+        else:
+            args.mode = selected
+
+        if args.mode in {"msg", "post"}:
+            max_profiles = _prompt_int("How many profiles/posts? (0=all) [0]: ", 0)
+            args.max_profiles = max_profiles
+        else:
+            args.max_profiles = args.max_profiles
+
+        if args.mode == "post" and not args.populate_img_links:
+            try:
+                yn = input("Populate IMG_LINK from POST_LINK first? (y/N): ").strip().lower()
+            except Exception:
+                yn = ""
+            if yn in {"y", "yes", "1", "true"}:
+                args.populate_img_links = True
+
     if args.max_profiles is not None:
-        Config.MAX_PROFILES = args.max_profiles
+        try:
+            mp = int(args.max_profiles)
+        except Exception:
+            mp = 0
+        Config.MAX_PROFILES = 0 if mp <= 0 else mp
 
     try:
         if args.mode == "msg":
