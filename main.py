@@ -168,6 +168,12 @@ class Config:
     POST_DENIED_RETRIES = int(os.getenv("DD_POST_DENIED_RETRIES", "1") or "1")
     POST_DENIED_BACKOFF_SECONDS = int(os.getenv("DD_POST_DENIED_BACKOFF_SECONDS", "600") or "600")
 
+    POST_PRE_SUBMIT_DELAY_SECONDS = float(os.getenv("DD_POST_PRE_SUBMIT_DELAY_SECONDS", "2") or "2")
+    POST_PRE_SUBMIT_JITTER_SECONDS = float(os.getenv("DD_POST_PRE_SUBMIT_JITTER_SECONDS", "2") or "2")
+    POST_DENIED_BACKOFF_MULTIPLIER = float(os.getenv("DD_POST_DENIED_BACKOFF_MULTIPLIER", "2") or "2")
+    POST_DENIED_BACKOFF_JITTER_SECONDS = float(os.getenv("DD_POST_DENIED_BACKOFF_JITTER_SECONDS", "10") or "10")
+    POST_MAX_CONSECUTIVE_DENIED = int(os.getenv("DD_POST_MAX_CONSECUTIVE_DENIED", "3") or "3")
+
     POST_MAX_REPEAT_CHARS = int(os.getenv("DD_POST_MAX_REPEAT_CHARS", "6") or "6")
     POST_CAPTION_MAX_LEN = int(os.getenv("DD_POST_CAPTION_MAX_LEN", "300") or "300")
     POST_TAGS_MAX_LEN = int(os.getenv("DD_POST_TAGS_MAX_LEN", "120") or "120")
@@ -3483,6 +3489,8 @@ def run_post_mode(args):
         success = 0
         failed = 0
 
+        consecutive_denied = 0
+
         def cooldown_wait(seconds: int):
             if seconds <= 0:
                 return
@@ -3501,6 +3509,21 @@ def run_post_mode(args):
             except Exception:
                 time.sleep(seconds)
 
+        def _jitter_seconds(base: float, jitter: float) -> float:
+            try:
+                b = float(base)
+                j = float(jitter)
+            except Exception:
+                return 0.0
+            if b < 0:
+                b = 0
+            if j <= 0:
+                return b
+            try:
+                return b + random.uniform(0, j)
+            except Exception:
+                return b
+
         with Progress(
             SpinnerColumn(),
             TextColumn("{task.description}"),
@@ -3518,11 +3541,18 @@ def run_post_mode(args):
                 logger.info(f"\n[{idx}/{len(pending)}] 📝 {post['type'].upper()} (row {row_ref})")
                 logger.info("─" * 50)
 
+                stop_early = False
+
                 try:
                     result = None
 
                     denied_retries = max(0, int(Config.POST_DENIED_RETRIES))
                     for denied_try in range(0, denied_retries + 1):
+                        # Small randomized delay before each attempt to reduce rate-limit patterns
+                        pre = _jitter_seconds(Config.POST_PRE_SUBMIT_DELAY_SECONDS, Config.POST_PRE_SUBMIT_JITTER_SECONDS)
+                        if pre > 0:
+                            cooldown_wait(int(pre))
+
                         if post["type"] == "text":
                             result = creator.create_text_post(
                                 title=post["title"],
@@ -3541,14 +3571,36 @@ def run_post_mode(args):
                             sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
                             sheets_mgr.update_cell(post_queue, post["row"], col_notes, "Invalid type")
                             failed += 1
-                            progress.advance(task_id, 1)
-                            result = None
+
+                        # Track consecutive denied to stop early if site is blocking uploads
+                        if result and (result.get("status") == "Denied"):
+                            consecutive_denied += 1
+                        else:
+                            if consecutive_denied > 0:
+                                consecutive_denied = 0
+
+                        if consecutive_denied >= max(1, int(Config.POST_MAX_CONSECUTIVE_DENIED)):
+                            logger.warning(
+                                f"Too many consecutive denied uploads ({consecutive_denied}). Stopping early to avoid bans."
+                            )
+                            stop_early = True
                             break
 
                         if result and (result.get("status") == "Denied"):
                             denied_url = (result.get("url") or "").strip()
                             if PostCreator._is_denied_or_share_url(denied_url) and denied_try < denied_retries:
-                                wait_s = max(0, int(Config.POST_DENIED_BACKOFF_SECONDS))
+                                base_wait = max(0, int(Config.POST_DENIED_BACKOFF_SECONDS))
+                                try:
+                                    mult = float(Config.POST_DENIED_BACKOFF_MULTIPLIER)
+                                    if mult < 1:
+                                        mult = 1
+                                except Exception:
+                                    mult = 1
+                                wait_s = int(base_wait * (mult ** denied_try))
+                                try:
+                                    wait_s = int(wait_s + random.uniform(0, float(Config.POST_DENIED_BACKOFF_JITTER_SECONDS)))
+                                except Exception:
+                                    pass
                                 if wait_s > 0:
                                     logger.warning(
                                         f"Denied (url={denied_url}). Backing off {wait_s}s then retrying..."
@@ -3557,12 +3609,25 @@ def run_post_mode(args):
                                 continue
                         break
 
+                    if stop_early:
+                        sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
+                        sheets_mgr.update_cell(
+                            post_queue,
+                            post["row"],
+                            col_notes,
+                            f"Denied: stopped after {consecutive_denied} consecutive denies"
+                        )
+                        failed += 1
+                        progress.advance(task_id, 1)
+                        break
+
                     if post["type"] not in {"text", "image"}:
                         continue
 
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     attempt_num = int(post.get("attempt") or 1)
                     if result and "Posted" in result["status"]:
+                        consecutive_denied = 0
                         sheets_mgr.update_cell(post_queue, post["row"], col_status, "Done")
                         sheets_mgr.update_cell(post_queue, post["row"], col_post_url, result["url"])
                         sheets_mgr.update_cell(post_queue, post["row"], col_timestamp, timestamp)
@@ -3612,6 +3677,8 @@ def run_post_mode(args):
                             sheets_mgr.update_cell(post_queue, post["row"], col_notes, result["status"])
                             success += 1
 
+                            consecutive_denied = 0
+
                             try:
                                 activity.log(
                                     mode="post",
@@ -3646,7 +3713,11 @@ def run_post_mode(args):
                             pass
 
                     time.sleep(3)
-                    progress.advance(task_id, 1)
+                    if not stop_early:
+                        progress.advance(task_id, 1)
+
+                    if stop_early:
+                        break
 
                     if idx < len(pending):
                         s = (result.get("status") if result else "") or ""
