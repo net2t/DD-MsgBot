@@ -3530,8 +3530,10 @@ def run_post_mode(args):
 
         success = 0
         failed = 0
+        skipped = 0
 
         consecutive_denied = 0
+        stop_reason = ""
 
         def cooldown_wait(seconds: int):
             if seconds <= 0:
@@ -3639,6 +3641,7 @@ def run_post_mode(args):
                                     "Uploads are currently denied by the site (upload-denied). "
                                     "Stopping Post Mode early to avoid repeated retries."
                                 )
+                                stop_reason = f"upload-denied ({denied_url})"
                                 stop_early = True
                                 break
 
@@ -3673,6 +3676,18 @@ def run_post_mode(args):
                         )
                         failed += 1
                         progress.advance(task_id, 1)
+
+                        # Mark remaining posts as skipped so they don't keep retrying in the same run.
+                        # This is especially important when the site is blocking uploads.
+                        if stop_reason and idx < len(pending):
+                            for rest in pending[idx:]:
+                                try:
+                                    sheets_mgr.update_cell(post_queue, rest["row"], col_status, "Skipped")
+                                    sheets_mgr.update_cell(post_queue, rest["row"], col_notes, f"Stopped early: {stop_reason}")
+                                    skipped += 1
+                                except Exception:
+                                    pass
+                                progress.advance(task_id, 1)
                         break
 
                     if post["type"] not in {"text", "image"}:
@@ -3803,6 +3818,10 @@ def run_post_mode(args):
         logger.info("\n" + "=" * 70)
         logger.success(f"✅ Success: {success}/{len(pending)}")
         logger.error(f"❌ Failed: {failed}/{len(pending)}")
+        if skipped:
+            logger.warning(f"⚠️ Skipped: {skipped}/{len(pending)}")
+        if stop_reason:
+            logger.warning(f"Stopped early: {stop_reason}")
         logger.info("=" * 70 + "\n")
 
     finally:
