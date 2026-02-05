@@ -155,6 +155,7 @@ class Config:
 
     # Browser
     CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "chromedriver.exe")
+    HEADLESS = os.getenv("DD_HEADLESS", "1").strip().lower() in {"1", "true", "yes", "y"}
 
     # Bot Settings
     DEBUG = os.getenv("DD_DEBUG", "0") == "1"
@@ -291,7 +292,8 @@ class BrowserManager:
         """Setup headless Chrome browser"""
         try:
             opts = Options()
-            opts.add_argument("--headless=new")
+            if Config.HEADLESS:
+                opts.add_argument("--headless=new")
             opts.add_argument("--window-size=1920,1080")
             opts.add_argument("--disable-blink-features=AutomationControlled")
             opts.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
@@ -688,6 +690,42 @@ class ProfileScraper:
             return "".join(ch for ch in text if ord(ch) <= 0xFFFF)
         except Exception:
             return text
+
+    @staticmethod
+    def _parse_rate_limit_seconds(text: str) -> int:
+        t = (text or "").lower()
+        m = re.search(r"(\d+)\s*(?:min|mins|minute|minutes)", t)
+        if m:
+            try:
+                return max(30, int(m.group(1)) * 60)
+            except Exception:
+                return 120
+        return 120
+
+    def _detect_rate_limit(self) -> int:
+        try:
+            src = (self.driver.page_source or "")
+        except Exception:
+            src = ""
+        low = src.lower()
+        if "min baad" in low or "image share" in low or "2 min" in low:
+            return self._parse_rate_limit_seconds(low)
+        return 0
+
+    def _detect_repeating_image(self) -> bool:
+        try:
+            src = (self.driver.page_source or "")
+        except Exception:
+            src = ""
+        low = src.lower()
+        # best-effort: site indicates duplicate/repeat upload
+        if "repeat" in low or "repeating" in low or "already" in low:
+            return True
+        if "same image" in low or "duplicate" in low or "pehle" in low:
+            return True
+        if "tasveer" in low and ("dobara" in low or "bar bar" in low or "phir" in low):
+            return True
+        return False
 
     def scrape_profile(self, nickname: str) -> Optional[Dict]:
         """Scrape user profile data"""
@@ -1410,6 +1448,11 @@ class PostCreator:
                 pass
             time.sleep(2)
 
+            wait_s = self._detect_rate_limit()
+            if wait_s:
+                self.logger.warning(f"Rate limit detected. Wait ~{wait_s}s then retry.")
+                return {"status": "Rate Limited", "url": ProfileScraper.clean_url(self.driver.current_url), "wait_seconds": wait_s}
+
             post_url = self._extract_post_url()
             if self._is_denied_or_share_url(post_url):
                 self.logger.error(f"Text post denied (url={post_url})")
@@ -1526,6 +1569,15 @@ class PostCreator:
             except TimeoutException:
                 pass
             time.sleep(2)
+
+            wait_s = self._detect_rate_limit()
+            if wait_s:
+                self.logger.warning(f"Rate limit detected. Wait ~{wait_s}s then retry.")
+                return {"status": "Rate Limited", "url": ProfileScraper.clean_url(self.driver.current_url), "wait_seconds": wait_s}
+
+            if self._detect_repeating_image():
+                self.logger.error("Image rejected: repeating/duplicate image")
+                return {"status": "Repeating", "url": ProfileScraper.clean_url(self.driver.current_url)}
 
             post_url = self._extract_post_url()
             if self._is_denied_or_share_url(post_url):
@@ -3616,6 +3668,25 @@ def run_post_mode(args):
                             sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
                             sheets_mgr.update_cell(post_queue, post["row"], col_notes, "Invalid type")
                             failed += 1
+
+                        # If we are rate limited, wait and retry once (uses result.wait_seconds when available)
+                        if result and result.get("status") == "Rate Limited" and denied_try < denied_retries:
+                            try:
+                                wait_s = int(result.get("wait_seconds") or 120)
+                            except Exception:
+                                wait_s = 120
+                            # Add small buffer
+                            wait_s = max(30, wait_s + 10)
+                            logger.warning(f"Rate limited. Waiting {wait_s}s then retrying...")
+                            cooldown_wait(wait_s)
+                            continue
+
+                        if result and result.get("status") == "Repeating":
+                            sheets_mgr.update_cell(post_queue, post["row"], col_status, "Repeating")
+                            sheets_mgr.update_cell(post_queue, post["row"], col_notes, "Image rejected: repeating/duplicate")
+                            failed += 1
+                            progress.advance(task_id, 1)
+                            break
 
                         # Track consecutive denied to stop early if site is blocking uploads
                         if result and (result.get("status") == "Denied"):
