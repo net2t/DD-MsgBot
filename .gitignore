@@ -3,6 +3,8 @@
 !.windsurf/workflows/
 !.windsurf/workflows/**
 .env
+.env copy*
+.env*copy*
 credentials.json
 *.pkl
 

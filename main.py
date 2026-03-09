@@ -26,6 +26,7 @@ import urllib.error
 import socket
 import logging
 import random
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -64,7 +65,7 @@ console = Console(
     force_terminal=_rich_force,
     color_system=_rich_color,
 )
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 def _sheet_url(sheet_id: str) -> str:
     sid = (sheet_id or "").strip()
@@ -114,6 +115,13 @@ def run_logs_mode():
         def _tail_sheet(sheet_name: str, limit: int = 20) -> None:
             sh = sheets_mgr.get_sheet(Config.SHEET_ID, sheet_name, create_if_missing=False)
             if not sh:
+                # Try legacy names
+                legacy = {"MasterLog": "Logs", "MsgQueue": "MsgHistory",
+                          "PostQueueLog": "PostHistory", "InboxQueue": "Inbox"}
+                fallback = legacy.get(sheet_name)
+                if fallback:
+                    sh = sheets_mgr.get_sheet(Config.SHEET_ID, fallback, create_if_missing=False)
+            if not sh:
                 logger.warning(f"Sheet not found: {sheet_name}")
                 return
             sheets_mgr.api_calls += 1
@@ -130,8 +138,9 @@ def run_logs_mode():
             for r in tail:
                 logger.info(" | ".join([(c or "").strip() for c in r]))
 
-        _tail_sheet("Logs", limit=20)
-        _tail_sheet("ConversationLog", limit=20)
+        _tail_sheet("MasterLog", limit=20)
+        _tail_sheet("MsgQueue", limit=10)
+        _tail_sheet("PostQueueLog", limit=10)
     finally:
         logger.info(f"\n📝 Log: {logger.log_file}")
 
@@ -150,13 +159,12 @@ def run_setup_mode():
     _print_sheet_context(logger)
 
     required_sheets = [
-        "MsgList",
-        "PostQueue",
-        "InboxQueue",
-        "MsgHistory",
-        "PostHistory",
-        "Logs",
-        "ConversationLog",
+        "MsgList",       # MSG targets
+        "MsgQueue",      # MSG job queue (pending/done/failed per run)
+        "PostQueue",     # POST jobs queue
+        "PostQueueLog",  # POST results log
+        "InboxQueue",    # INBOX conversations + replies
+        "MasterLog",     # Single log for ALL modes
     ]
 
     for name in required_sheets:
@@ -564,9 +572,15 @@ class SheetsManager:
                 "MODE", "NAME", "NICK/URL", "CITY", "POSTS", "FOLLOWERS", "Gender",
                 "MESSAGE", "STATUS", "NOTES", "RESULT URL"
             ],
+            "MsgQueue": [
+                "TIMESTAMP", "NICK", "NAME", "MESSAGE", "POST_URL", "STATUS", "NOTES", "RESULT_URL"
+            ],
             "PostQueue": [
                 "STATUS", "TITLE", "TITLE_UR", "IMAGE_PATH", "TYPE",
                 "POST_URL", "TIMESTAMP", "NOTES", "SIGNATURE"
+            ],
+            "PostQueueLog": [
+                "TIMESTAMP", "TYPE", "TITLE", "IMAGE_PATH", "POST_URL", "STATUS", "NOTES"
             ],
             "InboxQueue": [
                 "NICK", "NAME", "LAST_MSG", "MY_REPLY", "STATUS",
@@ -580,6 +594,10 @@ class SheetsManager:
                 "NICK", "NAME", "LAST_MSG", "MY_REPLY", "STATUS",
                 "TIMESTAMP", "NOTES", "CONVERSATION_LOG"
             ],
+            "MasterLog": [
+                "TIMESTAMP", "MODE", "ACTION", "NICK", "URL", "STATUS", "DETAILS"
+            ],
+            # Legacy sheet names kept for backward compat
             "MsgHistory": [
                 "TIMESTAMP", "NICK", "NAME", "MESSAGE", "POST_URL",
                 "STATUS", "RESULT_URL"
@@ -1078,7 +1096,6 @@ class ProfileScraper:
                                     break
                             except Exception:
                                 continue
-
                         # Fallback: try reply button
                         if not href:
                             try:
@@ -1256,10 +1273,13 @@ class MessageRecorder:
         self.history_sheet = None
 
     def initialize(self) -> bool:
-        """Initialize MsgHistory sheet"""
-        self.history_sheet = self.sheets.get_sheet(Config.SHEET_ID, "MsgHistory")
+        """Initialize MsgQueue sheet (replaces MsgHistory)"""
+        # Try new name first, fall back to legacy
+        self.history_sheet = self.sheets.get_sheet(Config.SHEET_ID, "MsgQueue")
+        if not self.history_sheet:
+            self.history_sheet = self.sheets.get_sheet(Config.SHEET_ID, "MsgHistory")
         if self.history_sheet:
-            self.logger.debug("Message history tracking enabled")
+            self.logger.debug("Message history tracking enabled (MsgQueue)")
             return True
         return False
 
@@ -1285,9 +1305,12 @@ class PostHistoryRecorder:
         self.history_sheet = None
 
     def initialize(self) -> bool:
-        self.history_sheet = self.sheets.get_sheet(Config.SHEET_ID, "PostHistory")
+        # Try new name first, fall back to legacy
+        self.history_sheet = self.sheets.get_sheet(Config.SHEET_ID, "PostQueueLog")
+        if not self.history_sheet:
+            self.history_sheet = self.sheets.get_sheet(Config.SHEET_ID, "PostHistory")
         if self.history_sheet:
-            self.logger.debug("Post history tracking enabled")
+            self.logger.debug("Post history tracking enabled (PostQueueLog)")
             return True
         return False
 
@@ -1306,7 +1329,10 @@ class ActivityLogger:
         self.sheet = None
 
     def initialize(self) -> bool:
-        self.sheet = self.sheets.get_sheet(Config.SHEET_ID, "Logs")
+        # Try new MasterLog first, fall back to legacy Logs
+        self.sheet = self.sheets.get_sheet(Config.SHEET_ID, "MasterLog")
+        if not self.sheet:
+            self.sheet = self.sheets.get_sheet(Config.SHEET_ID, "Logs")
         return bool(self.sheet)
 
     def log(self, mode: str, action: str, nick: str = "", url: str = "", status: str = "", details: str = ""):
@@ -1324,7 +1350,10 @@ class ConversationLogger:
         self.sheet = None
 
     def initialize(self) -> bool:
-        self.sheet = self.sheets.get_sheet(Config.SHEET_ID, "ConversationLog")
+        # Try new MasterLog first, fall back to legacy ConversationLog
+        self.sheet = self.sheets.get_sheet(Config.SHEET_ID, "MasterLog")
+        if not self.sheet:
+            self.sheet = self.sheets.get_sheet(Config.SHEET_ID, "ConversationLog")
         return bool(self.sheet)
 
     def log(self, nick: str, direction: str, mode: str, message: str, url: str = "", status: str = ""):
@@ -2267,7 +2296,12 @@ class PostQueueLinkPopulator:
 
         return {"img_url": img_url, "title": title, "poet": poet}
 
-    def collect_rekhta_listing(self, listing_url: str, max_scrolls: int = 6) -> List[Dict[str, str]]:
+    def collect_rekhta_listing(
+        self,
+        listing_url: str,
+        max_scrolls: int = 6,
+        target_count: int = 0,
+    ) -> List[Dict[str, str]]:
         items: List[Dict[str, str]] = []
         seen: set = set()
 
@@ -2281,10 +2315,93 @@ class PostQueueLinkPopulator:
             return items
 
         last_count = 0
+        last_height = 0
         stable_rounds = 0
         max_scrolls = max(1, int(max_scrolls))
+        try:
+            tgt = int(target_count or 0)
+        except Exception:
+            tgt = 0
 
-        for _ in range(max_scrolls):
+        def _page_height() -> int:
+            try:
+                h = self.driver.execute_script("return document.body.scrollHeight || 0;")
+                return int(h or 0)
+            except Exception:
+                return 0
+
+        def _try_click_more() -> bool:
+            xpaths = [
+                "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'load more')]",
+                "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'show more')]",
+                "//a[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'load more')]",
+                "//a[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'show more')]",
+            ]
+            for xp in xpaths:
+                try:
+                    el = self.driver.find_element(By.XPATH, xp)
+                    if el and el.is_displayed() and el.is_enabled():
+                        try:
+                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+                        except Exception:
+                            pass
+                        try:
+                            el.click()
+                        except Exception:
+                            try:
+                                self.driver.execute_script("arguments[0].click();", el)
+                            except Exception:
+                                continue
+                        return True
+                except Exception:
+                    continue
+            return False
+
+        def _try_next_page_url(page_num: int) -> str:
+            try:
+                parsed = urlparse(listing_url)
+                qs = parse_qs(parsed.query)
+                qs["page"] = [str(page_num)]
+                new_query = "&".join([f"{k}={quote(str(v[0]))}" for k, v in qs.items() if v])
+                return parsed._replace(query=new_query).geturl()
+            except Exception:
+                if "?" in listing_url:
+                    return f"{listing_url}&page={page_num}"
+                return f"{listing_url}?page={page_num}"
+
+        def _try_click_next() -> bool:
+            selectors = ["a[rel='next']", "a.paginationNext", "a.next"]
+            for sel in selectors:
+                try:
+                    el = self.driver.find_element(By.CSS_SELECTOR, sel)
+                    if el and el.is_displayed() and el.is_enabled():
+                        try:
+                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+                        except Exception:
+                            pass
+                        try:
+                            el.click()
+                        except Exception:
+                            try:
+                                href = (el.get_attribute("href") or "").strip()
+                                if href:
+                                    self.driver.get(href)
+                                else:
+                                    self.driver.execute_script("arguments[0].click();", el)
+                            except Exception:
+                                continue
+                        return True
+                except Exception:
+                    continue
+            return False
+
+        scrolls_done = 0
+        no_progress_rounds = 0
+        observed_per_scroll: List[int] = []
+        page_num = 1
+        page_advances = 0
+
+        while True:
             cards = []
             try:
                 cards = self.driver.find_elements(By.CSS_SELECTOR, "div.shyriImgBox")
@@ -2340,19 +2457,88 @@ class PostQueueLinkPopulator:
                 except Exception:
                     continue
 
-            if len(items) == last_count:
+            if tgt > 0 and len(items) >= tgt:
+                break
+
+            prev_count = last_count
+            cur_count = len(items)
+            added = max(0, cur_count - prev_count)
+            if added == 0:
                 stable_rounds += 1
             else:
                 stable_rounds = 0
-            last_count = len(items)
+                observed_per_scroll.append(added)
+            last_count = cur_count
 
+            if tgt > 0 and observed_per_scroll:
+                non_zero = [n for n in observed_per_scroll[-5:] if n > 0]
+                if non_zero:
+                    avg = sum(non_zero) / float(len(non_zero))
+                    remaining = max(0, tgt - cur_count)
+                    needed = int(math.ceil(remaining / max(1.0, avg))) + 2
+                    max_scrolls = max(max_scrolls, scrolls_done + needed)
+
+            if scrolls_done >= max_scrolls:
+                break
+
+            before_h = _page_height()
             try:
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(2)
+                self.driver.execute_script("window.scrollBy(0, Math.max(600, window.innerHeight));")
             except Exception:
                 pass
+            time.sleep(1)
+            try:
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            except Exception:
+                pass
+            time.sleep(2)
+            after_h = _page_height()
+            if after_h <= before_h:
+                clicked = _try_click_more()
+                if clicked:
+                    time.sleep(2)
+                    after_h = _page_height()
 
-            if stable_rounds >= 2:
+            if added == 0:
+                no_progress_rounds += 1
+            else:
+                no_progress_rounds = 0
+
+            last_height = after_h
+            scrolls_done += 1
+
+            if tgt <= 0 and stable_rounds >= 2:
+                break
+
+            # If infinite scroll stalls (common around ~50), try pagination.
+            if tgt > 0 and no_progress_rounds >= 3 and len(items) < tgt:
+                page_num += 1
+                did_next = False
+                try:
+                    did_next = _try_click_next()
+                except Exception:
+                    did_next = False
+                if not did_next:
+                    next_url = _try_next_page_url(page_num)
+                    try:
+                        self.driver.get(next_url)
+                        did_next = True
+                    except Exception:
+                        did_next = False
+                if did_next:
+                    time.sleep(2)
+                    stable_rounds = 0
+                    no_progress_rounds = 0
+                    scrolls_done = 0
+                    observed_per_scroll = []
+                    last_count = len(items)
+                    page_advances += 1
+                    # Guard against infinite paging loops.
+                    if page_advances > 50:
+                        break
+                    continue
+
+            if no_progress_rounds >= 4:
                 break
 
         return items
@@ -3589,6 +3775,10 @@ def run_populate_mode(args):
             logger.warning("PostQueue needs IMAGE_PATH and TITLE columns to populate.")
             return
 
+        # ── Collect ALL existing image URLs AND source listing URLs from sheet ──
+        # We also look for a SOURCE_URL column to track which Rekhta page was scraped
+        col_source_url = find_col("SOURCE_URL", "REKHTA_URL", "SOURCE")
+
         # Remove duplicate IMAGE_PATH rows (keep first occurrence)
         if col_image_path is not None:
             seen = set()
@@ -3611,11 +3801,17 @@ def run_populate_mode(args):
                 sheets_mgr.api_calls += 1
                 all_rows = post_queue.get_all_values()
 
-        existing_links = set()
-        if col_image_path is not None:
-            for row in all_rows[1:]:
-                if len(row) > col_image_path and row[col_image_path].strip():
-                    existing_links.add(row[col_image_path].strip().lower())
+        # Build existing sets: image URLs + source listing URLs (both block re-scraping)
+        existing_image_urls = set()
+        existing_source_urls = set()
+        for row in all_rows[1:]:
+            if col_image_path is not None and len(row) > col_image_path and row[col_image_path].strip():
+                existing_image_urls.add(row[col_image_path].strip().lower())
+            if col_source_url is not None and len(row) > col_source_url and row[col_source_url].strip():
+                existing_source_urls.add(row[col_source_url].strip().lower())
+            # Also treat the NOTES field for legacy rows that didn't track source URL
+            # Check TITLE to guard against repeated shayari titles
+        existing_links = existing_image_urls | existing_source_urls
 
         listing_url = (Config.REKHTA_LISTING_URL or "").strip()
         if not listing_url:
@@ -3624,16 +3820,17 @@ def run_populate_mode(args):
 
         pop = PostQueueLinkPopulator(driver, logger)
         logger.info(f"Opening Rekhta listing: {listing_url}")
-        items = pop.collect_rekhta_listing(listing_url, Config.REKHTA_MAX_SCROLLS)
-        if not items:
-            logger.warning("No Rekhta items found on listing.")
-            return
 
         limit = 0
         if Config.REKHTA_POPULATE_LIMIT > 0:
             limit = Config.REKHTA_POPULATE_LIMIT
         elif Config.MAX_PROFILES > 0:
             limit = Config.MAX_PROFILES
+
+        items = pop.collect_rekhta_listing(listing_url, Config.REKHTA_MAX_SCROLLS, target_count=limit)
+        if not items:
+            logger.warning("No Rekhta items found on listing.")
+            return
         if limit > 0:
             items = items[:limit]
 
@@ -3673,6 +3870,7 @@ def run_populate_mode(args):
                         except Exception:
                             pass
                         continue
+
                     src_key = source_url.lower()
                     if src_key in seen_links:
                         skipped += 1
@@ -3687,6 +3885,27 @@ def run_populate_mode(args):
                             )
                         except Exception:
                             pass
+                        continue
+
+                    # Fast-path duplicate check: the listing page often exposes the final image URL.
+                    # If it's already present in PostQueue, skip opening the detail page.
+                    listing_img = (item.get("listing_img") or "").strip()
+                    listing_img_key = listing_img.lower() if listing_img else ""
+                    if listing_img_key and listing_img_key in seen_links:
+                        skipped += 1
+                        logger.info(f"  ↳ Skipped: IMAGE_PATH already exists in PostQueue")
+                        try:
+                            activity.log(
+                                mode="populate",
+                                action="skip_duplicate_img",
+                                nick="",
+                                url=listing_img,
+                                status="skipped",
+                                details="listing_img duplicate"
+                            )
+                        except Exception:
+                            pass
+                        seen_links.add(src_key)
                         continue
 
                     try:
@@ -3720,16 +3939,27 @@ def run_populate_mode(args):
                         f"Rekhta data {idx}/{total} | img_url={(img_url or 'N/A')[:120]} | title={(title or 'N/A')[:80]} | poet={(poet or 'N/A')[:80]}"
                     )
 
+                    # ── Block duplicate final image URL before writing ──
+                    img_key = (img_url or "").strip().lower()
+                    if img_key and img_key in seen_links:
+                        skipped += 1
+                        logger.info(f"  ↳ Skipped: IMAGE_PATH already exists in PostQueue")
+                        try:
+                            activity.log(mode="populate", action="skip_duplicate_img",
+                                         nick="", url=img_url, status="skipped", details="img_url duplicate")
+                        except Exception:
+                            pass
+                        continue
+
                     if preview_only:
                         added += 1
                         seen_links.add(src_key)
+                        if img_key:
+                            seen_links.add(img_key)
                         try:
                             activity.log(
-                                mode="populate",
-                                action="preview_item",
-                                nick="",
-                                url=source_url,
-                                status="preview",
+                                mode="populate", action="preview_item", nick="",
+                                url=source_url, status="preview",
                                 details=f"title={(title or '')[:120]}; poet={(poet or '')[:120]}"
                             )
                         except Exception:
@@ -3755,9 +3985,14 @@ def run_populate_mode(args):
                         row[col_notes] = "rekhta"
                     if col_signature is not None:
                         row[col_signature] = ""
+                    # Write source URL if column exists
+                    if col_source_url is not None:
+                        row[col_source_url] = source_url
 
                     sheets_mgr.append_row(post_queue, row)
                     seen_links.add(src_key)
+                    if img_key:
+                        seen_links.add(img_key)
                     added += 1
                     try:
                         activity.log(
@@ -4019,6 +4254,9 @@ def run_post_mode(args):
             except Exception:
                 return b
 
+        def short_retry_wait():
+            cooldown_wait(5)
+
         with Progress(
             TextColumn("{task.description}", markup=False),
             BarColumn(),
@@ -4029,50 +4267,51 @@ def run_post_mode(args):
         ) as progress:
             task_id = progress.add_task("Posting", total=len(pending))
 
-            for idx, post in enumerate(pending, 1):
-                title = post.get("title") or "Untitled"
-                row_ref = post.get("row")
-                progress.update(task_id, description=f"{post['type'].upper()} (row {row_ref})")
-                logger.info(f"\n[{idx}/{len(pending)}] 📝 {post['type'].upper()} (row {row_ref})")
-                logger.info("─" * 50)
+            try:
+                for idx, post in enumerate(pending, 1):
+                    row_ref = post.get("row")
+                    progress.update(task_id, description=f"{post['type'].upper()} (row {row_ref})")
+                    logger.info(f"\n[{idx}/{len(pending)}] 📝 {post['type'].upper()} (row {row_ref})")
+                    logger.info("─" * 50)
 
-                stop_early = False
-
-                try:
-                    result = None
-                    row_handled = False
-
-                    denied_retries = 0
-                    for denied_try in range(0, denied_retries + 1):
+                    try:
                         # Small randomized delay before each attempt to reduce rate-limit patterns
                         pre = _jitter_seconds(Config.POST_PRE_SUBMIT_DELAY_SECONDS, Config.POST_PRE_SUBMIT_JITTER_SECONDS)
                         if pre > 0:
                             cooldown_wait(int(pre))
 
+                        result = None
                         if post["type"] == "text":
                             result = creator.create_text_post(
-                                title=post["title"],
-                                content=post["content"],
-                                tags=post["tags"]
+                                title=post.get("title", ""),
+                                content=post.get("content", ""),
+                                tags=post.get("tags", "")
                             )
                         elif post["type"] == "image":
                             result = creator.create_image_post(
-                                image_path=post["image_path"],
-                                title=post["title"],
-                                content=post["content"],
-                                tags=post["tags"]
+                                image_path=post.get("image_path", ""),
+                                title=post.get("title", ""),
+                                content=post.get("content", ""),
+                                tags=post.get("tags", "")
                             )
                         else:
                             logger.error(f"Unknown type: {post['type']}")
                             sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
                             sheets_mgr.update_cell(post_queue, post["row"], col_notes, "Invalid type")
                             failed += 1
+                            progress.advance(task_id, 1)
+                            if idx < len(pending):
+                                short_retry_wait()
+                            continue
 
-                        if result and result.get("status") == "Rate Limited":
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        status = (result.get("status") if result else "") or "Error"
+                        result_url = (result.get("url") if result else "") or ""
+
+                        if status == "Rate Limited":
                             sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
                             sheets_mgr.update_cell(post_queue, post["row"], col_notes, "Rate limited")
                             failed += 1
-                            progress.advance(task_id, 1)
                             post_history.record_post(
                                 post_type=post.get("type", ""),
                                 title=post.get("title", ""),
@@ -4081,14 +4320,15 @@ def run_post_mode(args):
                                 status="Failed",
                                 notes="Rate limited"
                             )
-                            row_handled = True
-                            break
+                            progress.advance(task_id, 1)
+                            if idx < len(pending):
+                                short_retry_wait()
+                            continue
 
-                        if result and result.get("status") == "Repeating":
+                        if status == "Repeating":
                             sheets_mgr.update_cell(post_queue, post["row"], col_status, "Repeating")
                             sheets_mgr.update_cell(post_queue, post["row"], col_notes, "Image rejected: repeating/duplicate")
                             failed += 1
-                            progress.advance(task_id, 1)
                             post_history.record_post(
                                 post_type=post.get("type", ""),
                                 title=post.get("title", ""),
@@ -4097,213 +4337,110 @@ def run_post_mode(args):
                                 status="Repeating",
                                 notes="Image rejected: repeating/duplicate"
                             )
-                            row_handled = True
-                            break
-
-                        # Denied or error: mark Failed and skip (no retries)
-                        if result and result.get("status") in {"Denied", "Error"}:
-                            sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
-                            sheets_mgr.update_cell(post_queue, post["row"], col_notes, f"{result.get('status')}: {result.get('url','')}")
-                            failed += 1
                             progress.advance(task_id, 1)
-                            post_history.record_post(
-                                post_type=post.get("type", ""),
-                                title=post.get("title", ""),
-                                image_path=post.get("image_path", ""),
-                                post_url=result.get("url", "") if result else "",
-                                status="Failed",
-                                notes=f"{result.get('status')}: {result.get('url','')}"
-                            )
-                            row_handled = True
-                            break
+                            if idx < len(pending):
+                                short_retry_wait()
+                            continue
 
-                    if row_handled:
-                        continue
-
-                    if stop_early:
-                        sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
-                        sheets_mgr.update_cell(
-                            post_queue,
-                            post["row"],
-                            col_notes,
-                            f"Denied: stopped after {consecutive_denied} consecutive denies"
-                        )
-                        failed += 1
-                        progress.advance(task_id, 1)
-
-                        # Mark remaining posts as skipped so they don't keep retrying in the same run.
-                        # This is especially important when the site is blocking uploads.
-                        if stop_reason and idx < len(pending):
-                            for rest in pending[idx:]:
-                                try:
-                                    sheets_mgr.update_cell(post_queue, rest["row"], col_status, "Skipped")
-                                    sheets_mgr.update_cell(post_queue, rest["row"], col_notes, f"Stopped early: {stop_reason}")
-                                    skipped += 1
-                                except Exception:
-                                    pass
-                                progress.advance(task_id, 1)
-                        break
-
-                    if post["type"] not in {"text", "image"}:
-                        continue
-
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    attempt_num = int(post.get("attempt") or 1)
-                    if result and (result.get("status") == "Dry Run" or "Posted" in result["status"]):
-                        consecutive_denied = 0
-                        sheets_mgr.update_cell(post_queue, post["row"], col_status, "Done")
-                        sheets_mgr.update_cell(post_queue, post["row"], col_post_url, result["url"])
-                        sheets_mgr.update_cell(post_queue, post["row"], col_timestamp, timestamp)
-                        sheets_mgr.update_cell(post_queue, post["row"], col_notes, result["status"])
-                        success += 1
-
-                        post_history.record_post(
-                            post_type=post.get("type", ""),
-                            title=post.get("title", ""),
-                            image_path=post.get("image_path", ""),
-                            post_url=result.get("url", ""),
-                            status=result.get("status", ""),
-                            notes=result.get("status", "")
-                        )
-
-                        try:
-                            activity.log(
-                                mode="post",
-                                action="create_post",
-                                nick="",
-                                url=result.get("url", ""),
-                                status=result.get("status", ""),
-                                details=f"type={post.get('type','')}"
-                            )
-                        except Exception:
-                            pass
-                    elif result and "Verification" in result.get("status", ""):
-                        result_url = (result.get("url") or "").strip()
-                        is_post_url = ProfileScraper.is_valid_url(result_url)
-                        if (not is_post_url) or PostCreator._is_denied_or_share_url(result_url):
+                        if status in {"Denied", "Error"}:
                             sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
-                            sheets_mgr.update_cell(
-                                post_queue,
-                                post["row"],
-                                col_notes,
-                                f"Attempt {attempt_num}/{Config.POST_MAX_ATTEMPTS} - {result.get('status', 'Error')}"
-                            )
+                            sheets_mgr.update_cell(post_queue, post["row"], col_notes, f"{status}: {result_url}")
                             failed += 1
-
                             post_history.record_post(
                                 post_type=post.get("type", ""),
                                 title=post.get("title", ""),
                                 image_path=post.get("image_path", ""),
                                 post_url=result_url,
                                 status="Failed",
-                                notes=f"Verification failed: {result.get('status', '')}"
+                                notes=f"{status}: {result_url}"
                             )
+                            progress.advance(task_id, 1)
+                            if idx < len(pending):
+                                short_retry_wait()
+                            continue
 
-                            try:
-                                activity.log(
-                                    mode="post",
-                                    action="create_post_failed",
-                                    nick="",
-                                    url=result_url,
-                                    status=result.get("status", "Error"),
-                                    details=f"type={post.get('type','')}"
-                                )
-                            except Exception:
-                                pass
-                        else:
+                        if status == "Dry Run" or "Posted" in status:
                             sheets_mgr.update_cell(post_queue, post["row"], col_status, "Done")
-                            if result.get("url"):
-                                sheets_mgr.update_cell(post_queue, post["row"], col_post_url, result["url"])
+                            if result_url:
+                                sheets_mgr.update_cell(post_queue, post["row"], col_post_url, result_url)
                             sheets_mgr.update_cell(post_queue, post["row"], col_timestamp, timestamp)
-                            sheets_mgr.update_cell(post_queue, post["row"], col_notes, result["status"])
+                            sheets_mgr.update_cell(post_queue, post["row"], col_notes, status)
                             success += 1
-
                             post_history.record_post(
                                 post_type=post.get("type", ""),
                                 title=post.get("title", ""),
                                 image_path=post.get("image_path", ""),
-                                post_url=result.get("url", ""),
-                                status=result.get("status", ""),
-                                notes=result.get("status", "")
+                                post_url=result_url,
+                                status=status,
+                                notes=status
                             )
-
-                            consecutive_denied = 0
-
                             try:
                                 activity.log(
                                     mode="post",
                                     action="create_post",
                                     nick="",
-                                    url=result.get("url", ""),
-                                    status=result.get("status", ""),
+                                    url=result_url,
+                                    status=status,
                                     details=f"type={post.get('type','')}"
                                 )
                             except Exception:
                                 pass
-                    else:
+                            progress.advance(task_id, 1)
+                            if idx < len(pending):
+                                cooldown_wait(123)
+                            continue
+
+                        if "Verification" in status:
+                            is_post_url = ProfileScraper.is_valid_url(result_url)
+                            if (not is_post_url) or PostCreator._is_denied_or_share_url(result_url):
+                                sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
+                                sheets_mgr.update_cell(post_queue, post["row"], col_notes, f"{status}")
+                                failed += 1
+                                post_history.record_post(
+                                    post_type=post.get("type", ""),
+                                    title=post.get("title", ""),
+                                    image_path=post.get("image_path", ""),
+                                    post_url=result_url,
+                                    status="Failed",
+                                    notes=f"Verification failed: {status}"
+                                )
+                                progress.advance(task_id, 1)
+                                if idx < len(pending):
+                                    short_retry_wait()
+                            else:
+                                sheets_mgr.update_cell(post_queue, post["row"], col_status, "Done")
+                                if result_url:
+                                    sheets_mgr.update_cell(post_queue, post["row"], col_post_url, result_url)
+                                sheets_mgr.update_cell(post_queue, post["row"], col_timestamp, timestamp)
+                                sheets_mgr.update_cell(post_queue, post["row"], col_notes, status)
+                                success += 1
+                                progress.advance(task_id, 1)
+                                if idx < len(pending):
+                                    cooldown_wait(123)
+                            continue
+
                         sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
-                        sheets_mgr.update_cell(
-                            post_queue,
-                            post["row"],
-                            col_notes,
-                            f"Attempt {attempt_num}/{Config.POST_MAX_ATTEMPTS} - {result.get('status', 'Error')}"
-                        )
+                        sheets_mgr.update_cell(post_queue, post["row"], col_notes, f"{status}")
                         failed += 1
-
-                        post_history.record_post(
-                            post_type=post.get("type", ""),
-                            title=post.get("title", ""),
-                            image_path=post.get("image_path", ""),
-                            post_url=result.get("url", "") if result else "",
-                            status="Failed",
-                            notes=f"{result.get('status', 'Error')}"
-                        )
-
+                        progress.advance(task_id, 1)
+                        if idx < len(pending):
+                            short_retry_wait()
+                    except KeyboardInterrupt:
+                        raise
+                    except Exception as e:
+                        logger.error(f"Error: {e}")
                         try:
-                            activity.log(
-                                mode="post",
-                                action="create_post_failed",
-                                nick="",
-                                url=result.get("url", "") if result else "",
-                                status=result.get("status", "Error") if result else "Error",
-                                details=f"type={post.get('type','')}"
-                            )
+                            sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
+                            sheets_mgr.update_cell(post_queue, post["row"], col_notes, str(e)[:50])
                         except Exception:
                             pass
-
-                    time.sleep(3)
-                    if not stop_early:
+                        failed += 1
                         progress.advance(task_id, 1)
+                        if idx < len(pending):
+                            short_retry_wait()
 
-                    if stop_early:
-                        break
-
-                    if idx < len(pending):
-                        s = (result.get("status") if result else "") or ""
-                        if s in {"Posted", "Dry Run"}:
-                            cooldown_wait(130)
-
-                except Exception as e:
-                    logger.error(f"Error: {e}")
-                    sheets_mgr.update_cell(post_queue, post["row"], col_status, "Failed")
-                    sheets_mgr.update_cell(post_queue, post["row"], col_notes, str(e)[:50])
-                    failed += 1
-                    progress.advance(task_id, 1)
-
-                    try:
-                        activity.log(
-                            mode="post",
-                            action="exception",
-                            nick="",
-                            url="",
-                            status="Exception",
-                            details=str(e)[:500]
-                        )
-                    except Exception:
-                        pass
-
-                    if idx < len(pending):
-                        cooldown_wait(Config.POST_COOLDOWN_SECONDS)
+            except KeyboardInterrupt:
+                logger.warning("\n⚠️ Interrupted by user")
 
         logger.info("\n" + "=" * 70)
         logger.success(f"✅ Success: {success}/{len(pending)}")
@@ -4321,8 +4458,74 @@ def run_post_mode(args):
 # PHASE 3: INBOX MODE
 # ============================================================================
 
+def run_activity_mode(args):
+    """Phase 3a: Fetch DamaDam activity feed → log to MasterLog only. No replies."""
+    logger = Logger("activity")
+    _print_sheet_context(logger)
+    logger.info("=" * 70)
+    logger.info(f"DamaDam Bot V{VERSION} - ACTIVITY MODE")
+    logger.info("=" * 70 + "\n")
+
+    browser_mgr = BrowserManager(logger)
+    driver = browser_mgr.setup()
+    if not driver:
+        return
+
+    try:
+        logger.info("🔐 Login...")
+        if not browser_mgr.login():
+            logger.error("Login failed")
+            return
+        logger.success("✅ Login Success\n")
+
+        sheets_mgr = SheetsManager(logger)
+        logger.info("📊 Connecting to Google Sheets...")
+        if not sheets_mgr.connect():
+            logger.error("Sheets connection failed")
+            return
+        logger.success("✅ Sheet Connected\n")
+
+        activity_log = ActivityLogger(sheets_mgr, logger)
+        activity_log.initialize()
+
+        monitor = InboxMonitor(driver, logger)
+
+        logger.info("📊 Fetching Activity Feed...")
+        activity_items = monitor.fetch_activity(max_items=60, max_pages=5)
+
+        if not activity_items:
+            logger.info("No activity items found.")
+            return
+
+        logger.success(f"🧾 Found {len(activity_items)} activity items\n")
+
+        written = 0
+        for it in activity_items:
+            try:
+                activity_log.log(
+                    mode="activity",
+                    action="activity_feed",
+                    nick="",
+                    url=(it.get("url") or ""),
+                    status="info",
+                    details=(it.get("text") or "")[:500]
+                )
+                written += 1
+            except Exception:
+                pass
+
+        logger.info("\n" + "=" * 70)
+        logger.success(f"✅ Logged {written}/{len(activity_items)} activity items to MasterLog")
+        logger.info(f"📞 API Calls: {sheets_mgr.api_calls}")
+        logger.info(f"📝 Log: {logger.log_file}")
+        logger.info("=" * 70 + "\n")
+
+    finally:
+        browser_mgr.close()
+
+
 def run_inbox_mode(args):
-    """Phase 3: Monitor inbox and send replies"""
+    """Phase 3b: Monitor inbox conversations and send pending replies."""
     logger = Logger("inbox")
     _print_sheet_context(logger)
     logger.info("=" * 70)
@@ -4335,12 +4538,18 @@ def run_inbox_mode(args):
         return
 
     try:
+        logger.info("🔐 Login...")
         if not browser_mgr.login():
+            logger.error("Login failed")
             return
+        logger.success("✅ Login Success\n")
 
         sheets_mgr = SheetsManager(logger)
+        logger.info("📊 Connecting to Google Sheets...")
         if not sheets_mgr.connect():
+            logger.error("Sheets connection failed")
             return
+        logger.success("✅ Sheet Connected\n")
 
         activity = ActivityLogger(sheets_mgr, logger)
         activity.initialize()
@@ -4349,42 +4558,21 @@ def run_inbox_mode(args):
 
         monitor = InboxMonitor(driver, logger)
 
-        inbox_queue = sheets_mgr.get_sheet(Config.SHEET_ID, "Inbox", create_if_missing=False)
+        # Resolve InboxQueue sheet (try new name, then legacy names)
+        inbox_queue = sheets_mgr.get_sheet(Config.SHEET_ID, "InboxQueue", create_if_missing=False)
         if not inbox_queue:
-            inbox_queue = sheets_mgr.get_sheet(Config.SHEET_ID, "InboxQueue", create_if_missing=False)
+            inbox_queue = sheets_mgr.get_sheet(Config.SHEET_ID, "Inbox", create_if_missing=False)
         if not inbox_queue:
             inbox_queue = sheets_mgr.get_sheet(Config.SHEET_ID, "Inbox & Activity", create_if_missing=False)
         if not inbox_queue:
-            inbox_queue = sheets_mgr.get_sheet(Config.SHEET_ID, "Inbox")
+            inbox_queue = sheets_mgr.get_sheet(Config.SHEET_ID, "InboxQueue")
         if not inbox_queue:
+            logger.error("InboxQueue sheet not found")
             return
 
-        logger.info("📥 Fetching inbox...")
+        logger.info("📥 Fetching inbox conversations...")
         inbox_messages = monitor.fetch_inbox()
         logger.success(f"Found {len(inbox_messages)} conversations\n")
-
-        try:
-            activity_items = monitor.fetch_activity(max_items=60, max_pages=5)
-        except Exception:
-            activity_items = []
-
-        if activity_items:
-            try:
-                logger.info(f"🧾 Activity items: {len(activity_items)} (latest)")
-            except Exception:
-                pass
-            for it in activity_items[:20]:
-                try:
-                    activity.log(
-                        mode="inbox",
-                        action="activity",
-                        nick="",
-                        url=(it.get("url", "") or ""),
-                        status="info",
-                        details=(it.get("text", "") or "")[:500]
-                    )
-                except Exception:
-                    pass
 
         sheets_mgr.api_calls += 1
         existing_rows = inbox_queue.get_all_values()
@@ -4395,13 +4583,12 @@ def run_inbox_mode(args):
             if row and row[0].strip()
         }
 
+        # Sync new conversations into InboxQueue
         new_count = 0
         appended_this_run: set = set()
         for msg in inbox_messages:
             nick_key = (msg.get("nick") or "").strip().lower()
-            if not nick_key:
-                continue
-            if nick_key in appended_this_run:
+            if not nick_key or nick_key in appended_this_run:
                 continue
             if nick_key not in existing_nicks:
                 values = [
@@ -4409,50 +4596,40 @@ def run_inbox_mode(args):
                     "pending", msg["timestamp"], "", ""
                 ]
                 sheets_mgr.append_row(inbox_queue, values)
-                logger.info(f"➕ New: {msg['nick']}")
+                logger.info(f"➕ New conversation: {msg['nick']}")
                 new_count += 1
                 appended_this_run.add(nick_key)
                 existing_nicks.add(nick_key)
-
                 try:
                     activity.log(
-                        mode="inbox",
-                        action="new_conversation",
-                        nick=msg.get("nick", ""),
-                        url=msg.get("conv_url", ""),
-                        status="pending",
-                        details=(msg.get("last_msg", "") or "")[:500]
+                        mode="inbox", action="new_conversation",
+                        nick=msg.get("nick", ""), url=msg.get("conv_url", ""),
+                        status="pending", details=(msg.get("last_msg", "") or "")[:500]
                     )
                 except Exception:
                     pass
 
+            # Log inbound messages that are new since last run
             try:
-                nick_key = (msg.get("nick") or "").strip().lower()
                 last_now = (msg.get("last_msg") or "").strip()
                 last_prev = (existing_last_msg.get(nick_key) or "").strip()
-                if nick_key and last_now and last_now != last_prev:
+                if last_now and last_now != last_prev:
                     conv_logger.log(
-                        nick=msg.get("nick", ""),
-                        direction="IN",
-                        mode="inbox",
-                        message=last_now,
-                        url=msg.get("conv_url", ""),
-                        status="received"
+                        nick=msg.get("nick", ""), direction="IN", mode="inbox",
+                        message=last_now, url=msg.get("conv_url", ""), status="received"
                     )
                     activity.log(
-                        mode="inbox",
-                        action="inbound_message",
-                        nick=msg.get("nick", ""),
-                        url=msg.get("conv_url", ""),
-                        status="received",
-                        details=last_now[:500]
+                        mode="inbox", action="inbound_message",
+                        nick=msg.get("nick", ""), url=msg.get("conv_url", ""),
+                        status="received", details=last_now[:500]
                     )
             except Exception:
                 pass
 
         if new_count:
-            logger.success(f"Added {new_count} new conversations\n")
+            logger.success(f"Synced {new_count} new conversations to InboxQueue\n")
 
+        # Reload sheet to get MY_REPLY values
         sheets_mgr.api_calls += 1
         all_rows = inbox_queue.get_all_values()
 
@@ -4466,22 +4643,21 @@ def run_inbox_mode(args):
                 })
 
         if not pending_replies:
-            logger.info("No pending replies")
+            logger.info("✅ No pending replies to send.")
+            logger.info(f"📝 Log: {logger.log_file}")
             return
 
         logger.info(f"📤 Sending {len(pending_replies)} replies...\n")
 
         success = 0
         for idx, reply in enumerate(pending_replies, 1):
-            logger.info(f"[{idx}/{len(pending_replies)}] {reply['nick']}")
-
+            logger.info(f"[{idx}/{len(pending_replies)}] Replying to: {reply['nick']}")
             try:
                 conv_url = None
                 for msg in inbox_messages:
                     if msg["nick"].lower() == reply["nick"].lower():
                         conv_url = msg["conv_url"]
                         break
-
                 if not conv_url:
                     conv_url = f"{Config.BASE_URL}/inbox/{reply['nick']}/"
 
@@ -4493,33 +4669,30 @@ def run_inbox_mode(args):
                     if conv_log:
                         sheets_mgr.update_cell(inbox_queue, reply["row"], 8, conv_log)
                     success += 1
-
+                    logger.success(f"  ✅ Sent to {reply['nick']}")
                     try:
                         activity.log(
-                            mode="inbox",
-                            action="send_reply",
-                            nick=reply.get("nick", ""),
-                            url=conv_url,
-                            status="sent",
-                            details=(reply.get("reply", "") or "")[:500]
+                            mode="inbox", action="send_reply",
+                            nick=reply.get("nick", ""), url=conv_url,
+                            status="sent", details=(reply.get("reply", "") or "")[:500]
                         )
                         conv_logger.log(
-                            nick=reply.get("nick", ""),
-                            direction="OUT",
-                            mode="inbox",
-                            message=reply.get("reply", ""),
-                            url=conv_url,
-                            status="sent"
+                            nick=reply.get("nick", ""), direction="OUT", mode="inbox",
+                            message=reply.get("reply", ""), url=conv_url, status="sent"
                         )
                     except Exception:
                         pass
+                else:
+                    logger.error(f"  ❌ Failed to send to {reply['nick']}")
 
                 time.sleep(2)
             except Exception as e:
-                logger.error(f"Error: {e}")
+                logger.error(f"Reply error for {reply['nick']}: {e}")
 
         logger.info("\n" + "=" * 70)
         logger.success(f"✅ Sent: {success}/{len(pending_replies)}")
+        logger.info(f"📞 API Calls: {sheets_mgr.api_calls}")
+        logger.info(f"📝 Log: {logger.log_file}")
         logger.info("=" * 70 + "\n")
 
     finally:
@@ -4546,7 +4719,7 @@ def main():
 
     parser.add_argument(
         "--mode",
-        choices=["msg", "populate", "post", "inbox", "logs", "setup"],
+        choices=["msg", "populate", "post", "inbox", "activity", "logs", "setup"],
         default=None,
         help="Operation mode"
     )
@@ -4600,6 +4773,8 @@ def main():
     def _prompt_int(prompt: str, default: int) -> int:
         try:
             raw = input(prompt).strip()
+        except KeyboardInterrupt:
+            raise
         except Exception:
             raw = ""
         if not raw:
@@ -4612,6 +4787,8 @@ def main():
     def _prompt_choice(prompt: str, choices: Dict[str, str], default_key: str) -> str:
         try:
             raw = input(prompt).strip()
+        except KeyboardInterrupt:
+            raise
         except Exception:
             raw = ""
         if not raw:
@@ -4620,63 +4797,47 @@ def main():
 
     # If mode not provided, show interactive menu (unless disabled)
     if not args.no_menu and not args.mode:
-        console.print("\nSelect mode:")
-        console.print("  1) Message Mode")
-        console.print("  2) Post Mode")
-        console.print("  3) Inbox")
-        console.print("  4) Logs")
-        console.print("  5) Setup")
+        try:
+            console.print("\nSelect mode:")
+            console.print("  1) Message Bot")
+            console.print("  2) Rekhta Mode")
+            console.print("  3) Posting Bot")
+            console.print("  4) Inbox Mails")
+            console.print("  5) Log Reports")
+            console.print("  6) Setup Sheets")
 
-        main_map = {"1": "msg", "2": "post_menu", "3": "inbox_menu", "4": "logs", "5": "setup"}
-        selected = _prompt_choice("Enter choice [1]: ", main_map, "1")
+            main_map = {
+                "1": "msg",
+                "2": "populate",
+                "3": "post",
+                "4": "inbox_menu",
+                "5": "logs",
+                "6": "setup",
+            }
+            selected = _prompt_choice("Enter choice [1]: ", main_map, "1")
 
-        if selected == "post_menu":
-            console.print("\nPost Mode:")
-            console.print("  1) Populate")
-            console.print("  2) Post Start")
-            post_sel = _prompt_choice("Enter choice [1]: ", {"1": "populate", "2": "post"}, "1")
-            args.mode = post_sel
-
-            if args.mode == "populate":
-                # Smoke-test friendly default: 2
-                max_items = _prompt_int("How many items to populate? (default 2) [2]: ", 2)
-                if max_items <= 0:
-                    max_items = 2
-                args.populate_limit = max_items
-                try:
-                    yn = input("Write to PostQueue now? (Y/n): ").strip().lower()
-                except Exception:
-                    yn = ""
-                if yn not in {"n", "no", "0", "false"}:
-                    args.populate_write = True
+            if selected == "inbox_menu":
+                console.print("\nInbox Mails:")
+                console.print("  1) Activity History")
+                console.print("  2) Check Inbox")
+                inbox_sel = _prompt_choice("Enter choice [2]: ", {"1": "activity", "2": "inbox"}, "2")
+                args.mode = inbox_sel
             else:
+                args.mode = selected
+
+            if args.mode == "msg":
+                max_profiles = _prompt_int("How many profiles? (0=all) [0]: ", 0)
+                args.max_profiles = max_profiles
+            elif args.mode == "populate":
+                max_items = _prompt_int("How many items to populate? (0=all) [0]: ", 0)
+                args.populate_limit = max_items
+                args.populate_write = True
+            elif args.mode == "post":
                 max_profiles = _prompt_int("How many posts? (0=all) [0]: ", 0)
                 args.max_profiles = max_profiles
-                if not args.populate_img_links:
-                    try:
-                        yn = input("Populate IMG_LINK from POST_LINK first? (y/N): ").strip().lower()
-                    except Exception:
-                        yn = ""
-                    if yn in {"y", "yes", "1", "true"}:
-                        args.populate_img_links = True
-
-        elif selected == "inbox_menu":
-            console.print("\nInbox:")
-            console.print("  1) Activity")
-            console.print("  2) InBox / Reply")
-            inbox_sel = _prompt_choice("Enter choice [2]: ", {"1": "activity", "2": "inbox"}, "2")
-            # Activity is logged throughout; keep it as a no-op placeholder for now.
-            args.mode = "inbox" if inbox_sel == "inbox" else "inbox"
-        elif selected == "logs":
-            args.mode = "logs"
-        elif selected == "setup":
-            args.mode = "setup"
-        else:
-            args.mode = "msg"
-
-        if args.mode == "msg":
-            max_profiles = _prompt_int("How many profiles? (0=all) [0]: ", 0)
-            args.max_profiles = max_profiles
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupted[/yellow]")
+            return
 
     if args.max_profiles is not None:
         try:
@@ -4701,6 +4862,8 @@ def main():
             run_post_mode(args)
         elif args.mode == "inbox":
             run_inbox_mode(args)
+        elif args.mode == "activity":
+            run_activity_mode(args)
         elif args.mode == "logs":
             run_logs_mode()
         elif args.mode == "setup":

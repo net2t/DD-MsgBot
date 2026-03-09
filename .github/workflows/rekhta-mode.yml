@@ -1,0 +1,20 @@
+name: Rekhta Mode
+
+"on":
+  workflow_dispatch: {}
+  schedule:
+    - cron: "*/30 * * * *"
+
+jobs:
+  run:
+    uses: ./.github/workflows/dashboard.yml
+    with:
+      mode: populate
+      max_profiles: ""
+      dry_run: false
+      populate_img_links: false
+      populate_limit: ""
+      populate_write: true
+      headless: true
+      debug: false
+    secrets: inherit

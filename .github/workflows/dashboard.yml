@@ -1,6 +1,48 @@
 name: DamaDam Dashboard
 
 "on":
+  workflow_call:
+    inputs:
+      mode:
+        required: true
+        type: string
+      max_profiles:
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        required: false
+        type: boolean
+        default: false
+      populate_img_links:
+        required: false
+        type: boolean
+        default: false
+      populate_limit:
+        required: false
+        type: string
+        default: ""
+      populate_write:
+        required: false
+        type: boolean
+        default: false
+      headless:
+        required: false
+        type: boolean
+        default: true
+      debug:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      DD_LOGIN_EMAIL:
+        required: true
+      DD_LOGIN_PASS:
+        required: true
+      DD_SHEET_ID:
+        required: true
+      GOOGLE_CREDENTIALS_JSON:
+        required: true
   workflow_dispatch:
     inputs:
       mode:
@@ -52,7 +94,7 @@ name: DamaDam Dashboard
         default: false
 
 concurrency:
-  group: damadam-dashboard
+  group: damadam-dashboard-${{ inputs.mode || github.event.inputs.mode || 'unknown' }}
   cancel-in-progress: true
 
 jobs:

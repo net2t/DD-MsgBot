@@ -4,9 +4,10 @@
 
 Clean, modular, multi-mode automation bot for DamaDam.pk with three complete phases:
 
-- **MSG Mode** (Phase 1): Send personal messages to targets from MsgList sheet
-- **POST Mode** (Phase 2): Create text/image posts from PostQueue sheet
-- **INBOX Mode** (Phase 3): Monitor inbox, sync conversations, send replies
+- **Message Bot** (Phase 1): Send personal messages to targets from MsgList sheet
+- **Posting Bot** (Phase 2): Create text/image posts from PostQueue sheet
+- **Inbox Mails** (Phase 3): Monitor inbox, sync conversations, send replies
+- **Rekhta Mode**: Populate PostQueue with Rekhta shayari-image entries
 
 ---
 
@@ -104,6 +105,17 @@ See `.env.sample` for all options.
 python main.py
 ```
 
+Interactive menu labels:
+
+- **Message Bot**
+- **Rekhta Mode**
+- **Posting Bot**
+- **Inbox Mails**
+  - **Check Inbox**
+  - **Activity History**
+- **Log Reports**
+- **Setup Sheets**
+
 ### CLI
 ```bash
 python main.py --mode msg    --no-menu --max-profiles 20
@@ -112,6 +124,11 @@ python main.py --mode inbox  --no-menu
 python main.py --mode setup  --no-menu
 python main.py --mode populate --no-menu --populate-limit 10 --populate-write
 ```
+
+Notes:
+
+- **Rekhta Mode limits**: `--populate-limit` is honored (not capped at 50). Increase `DD_REKHTA_MAX_SCROLLS` if you want the listing page to load more cards.
+- **Posting Bot cooldown**: waits **123 seconds** after a successful post, and **5 seconds** after duplicate/failure.
 
 ### Inbox Mode Notes
 
