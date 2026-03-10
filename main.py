@@ -4429,26 +4429,28 @@ def run_post_mode(args):
                                 break
 
                             if status == "Repeating":
-                                sheets_mgr.update_cell(post_queue, post["row"], col_status, "Repeating")
+                                logger.warning("Duplicate image detected; permanently skipping this row (no retry)")
+                                sheets_mgr.update_cell(post_queue, post["row"], col_status, "Skipped")
                                 sheets_mgr.update_cell(
                                     post_queue,
                                     post["row"],
                                     col_notes,
-                                    f"Image rejected: repeating/duplicate (attempt {attempt}/{max_attempts})"
+                                    "Duplicate image (repeating) - permanently skipped"
                                 )
                                 post_history.record_post(
                                     post_type=post.get("type", ""),
                                     title=post.get("title", ""),
                                     image_path=post.get("image_path", ""),
                                     post_url="",
-                                    status="Repeating",
-                                    notes="Image rejected: repeating/duplicate"
+                                    status="Skipped",
+                                    notes="Duplicate image (repeating) - permanently skipped"
                                 )
-
-                                if attempt < max_attempts:
-                                    short_retry_wait()
-                                    continue
-                                failed += 1
+                                try:
+                                    if post.get("image_path"):
+                                        posted_index.add(post.get("image_path", ""))
+                                except Exception:
+                                    pass
+                                skipped += 1
                                 row_done = True
                                 break
 
