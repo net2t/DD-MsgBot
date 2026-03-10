@@ -71,7 +71,11 @@ def create_overview_stats(msglist_df, postqueue_df, inbox_df, history_df):
         stats["Pending Replies"] = pending_replies
     
     if not history_df.empty and "STATUS" in history_df.columns:
-        successful = len(history_df[history_df["STATUS"].str.lower().isin(["sent", "done", "posted"], na=False)])
+        successful = len(
+            history_df[
+                history_df["STATUS"].fillna("").astype(str).str.lower().isin(["sent", "done", "posted"])
+            ]
+        )
         stats["Successful Messages"] = successful
     
     return stats
@@ -192,7 +196,11 @@ def main():
                 msg_stats = {
                     "Total Targets": len(msglist_df),
                     "Pending": len(msglist_df[msglist_df["STATUS"].str.lower().str.startswith("pending", na=False)]) if "STATUS" in msglist_df.columns else 0,
-                    "Completed": len(msglist_df[msglist_df["STATUS"].str.lower().isin(["done", "sent"], na=False)]) if "STATUS" in msglist_df.columns else 0
+                    "Completed": len(
+                        msglist_df[
+                            msglist_df["STATUS"].fillna("").astype(str).str.lower().isin(["done", "sent"])
+                        ]
+                    ) if "STATUS" in msglist_df.columns else 0
                 }
                 create_stats_grid(msg_stats, columns=3)
                 
@@ -216,7 +224,11 @@ def main():
                 post_stats = {
                     "Total Posts": len(postqueue_df),
                     "Pending": len(postqueue_df[postqueue_df["STATUS"].str.lower().str.startswith("pending", na=False)]) if "STATUS" in postqueue_df.columns else 0,
-                    "Published": len(postqueue_df[postqueue_df["STATUS"].str.lower().isin(["done", "posted"], na=False)]) if "STATUS" in postqueue_df.columns else 0
+                    "Published": len(
+                        postqueue_df[
+                            postqueue_df["STATUS"].fillna("").astype(str).str.lower().isin(["done", "posted"])
+                        ]
+                    ) if "STATUS" in postqueue_df.columns else 0
                 }
                 create_stats_grid(post_stats, columns=3)
                 
@@ -266,7 +278,11 @@ def main():
             if not history_df.empty:
                 hist_stats = {
                     "Total Sent": len(history_df),
-                    "Successful": len(history_df[history_df["STATUS"].str.lower().isin(["sent", "done", "posted"], na=False)]) if "STATUS" in history_df.columns else 0,
+                    "Successful": len(
+                        history_df[
+                            history_df["STATUS"].fillna("").astype(str).str.lower().isin(["sent", "done", "posted"])
+                        ]
+                    ) if "STATUS" in history_df.columns else 0,
                     "Failed": len(history_df[history_df["STATUS"].str.lower() == "failed"]) if "STATUS" in history_df.columns else 0
                 }
                 create_stats_grid(hist_stats, columns=3)
