@@ -27,8 +27,6 @@ name: DamaDam Dashboard
         required: true
       GOOGLE_CREDENTIALS_JSON:
         required: true
-      GEMINI_API_KEY:
-        required: false
 
   workflow_dispatch:
     inputs:
@@ -110,7 +108,6 @@ jobs:
           DD_LOGIN_PASS:        ${{ secrets.DD_LOGIN_PASS }}
           DD_SHEET_ID:          ${{ secrets.DD_SHEET_ID }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
           DD_HEADLESS:          "${{ inputs.headless && '1' || '0' }}"
           DD_DEBUG:             "${{ inputs.debug && '1' || '0' }}"
         run: |

@@ -8,7 +8,7 @@ What it does:
   1. Opens rekhta.org/shayari-image (infinite scroll page)
   2. Scrolls the page REKHTA_MAX_SCROLLS times to load cards
   3. Parses each card for: image URL, Roman Urdu text, poet name
-  4. Converts Roman Urdu to Urdu script via Claude API (roman_to_urdu())
+  4. Writes Urdu caption as a Google Sheets GOOGLETRANSLATE() formula
   5. BATCH duplicate check: loads all existing IMG_LINK values from PostQueue
      at start — no per-row comparison during scraping
   6. Appends only NEW entries to PostQueue with STATUS=Pending
@@ -34,7 +34,6 @@ from selenium.common.exceptions import TimeoutException
 
 from config import Config
 from utils.logger import Logger, pkt_stamp
-from utils.helpers import roman_to_urdu
 from core.sheets import SheetsManager
 
 
@@ -119,17 +118,14 @@ def run(driver, sheets: SheetsManager, logger: Logger,
         logger.info("No new items to add — PostQueue is up to date")
         return {"added": 0, "skipped_dup": dup_count, "total_scraped": len(scraped)}
 
-    # ── Convert Roman Urdu → Urdu script and append to sheet ─────────────────
+    # ── Append to sheet (Urdu column uses GOOGLETRANSLATE formula) ──────────
     added = 0
     for idx, item in enumerate(new_items, start=1):
-        logger.info(f"[{idx}/{len(new_items)}] Converting: {item['roman_text'][:50]}...")
+        logger.info(f"[{idx}/{len(new_items)}] Adding: {item['roman_text'][:50]}...")
 
-        # Convert to Urdu script using Claude API
-        urdu_caption = roman_to_urdu(
-            roman_text=item["roman_text"],
-            poet_name=item["poet"],
-            logger=logger,
-        )
+        # Column D (URDU) formula: translate Column C (TITLE) for the same row.
+        # Using INDIRECT+ROW avoids hardcoding the row number.
+        urdu_formula = '=GOOGLETRANSLATE(INDIRECT("C"&ROW()),"en","ur")'
 
         # Build the row matching Config.POST_QUEUE_COLS order:
         # STATUS, TYPE, TITLE, URDU, IMG_LINK, POET, POST_URL, ADDED, NOTES
@@ -137,7 +133,7 @@ def run(driver, sheets: SheetsManager, logger: Logger,
             "Pending",              # STATUS
             "image",               # TYPE
             item["roman_text"],    # TITLE (Roman Urdu — kept for reference)
-            urdu_caption,          # URDU  (converted Urdu script — used as caption)
+            urdu_formula,          # URDU  (Sheets formula)
             item["img_link"],      # IMG_LINK
             item["poet"],          # POET
             "",                    # POST_URL (empty until posted)
