@@ -28,6 +28,7 @@ import time
 from typing import List, Dict, Set, Optional
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
@@ -74,16 +75,81 @@ def run(driver, sheets: SheetsManager, logger: Logger,
 
     # ── Scrape Rekhta listing page ────────────────────────────────────────────
     logger.info(f"Opening: {Config.REKHTA_URL}")
-    driver.get(Config.REKHTA_URL)
+    try:
+        driver.get(Config.REKHTA_URL)
+    except TimeoutException as e:
+        # Chrome sometimes throws "Timed out receiving message from renderer" on heavy pages.
+        # Retry once with a higher timeout.
+        try:
+            driver.execute_script("window.stop();")
+        except Exception:
+            pass
+        try:
+            driver.set_page_load_timeout(max(60, int(getattr(Config, "PAGE_LOAD_TIMEOUT", 15) or 15)))
+        except Exception:
+            pass
+        logger.warning(f"Page load timeout opening Rekhta; retrying once: {e}")
+        driver.get(Config.REKHTA_URL)
     time.sleep(4)
 
     # Scroll down to load more cards
     # The page uses infinite scroll — each scroll loads approximately 9–12 more cards
-    scroll_count = Config.REKHTA_MAX_SCROLLS
-    for scroll_num in range(1, scroll_count + 1):
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2.5)
-        logger.debug(f"Scroll {scroll_num}/{scroll_count} done")
+    # If max_items is provided, keep scrolling until we have loaded enough cards
+    # (or until no new cards load for a few scrolls).
+    target_cards = max_items if max_items and max_items > 0 else None
+    max_scrolls = Config.REKHTA_MAX_SCROLLS
+    if target_cards:
+        # Heuristic: ensure we have enough scroll budget for large targets.
+        # We still keep Config.REKHTA_MAX_SCROLLS as a minimum, not a strict cap.
+        max_scrolls = max(max_scrolls, int(target_cards / 8) + 2)
+
+    try:
+        prev_count = len(driver.find_elements(By.CSS_SELECTOR, "div.shyriImgBox"))
+    except Exception:
+        prev_count = 0
+    stagnant = 0
+    max_stagnant = 20 if target_cards else 3
+    for scroll_num in range(1, max_scrolls + 1):
+        # Some sites don't reliably trigger infinite-load on JS scrollTo alone.
+        # We combine END key + incremental scroll to mimic a real user.
+        try:
+            body = driver.find_element(By.TAG_NAME, "body")
+            body.send_keys(Keys.END)
+        except Exception:
+            pass
+
+        for _ in range(3):
+            driver.execute_script("window.scrollBy(0, 1200);")
+
+        # Wait a bit for new cards to load. Rekhta sometimes loads slowly.
+        # We'll poll for a short window before deciding that nothing new loaded.
+        count_now = 0
+        for _ in range(10):
+            time.sleep(0.6)
+            try:
+                cards_now = driver.find_elements(By.CSS_SELECTOR, "div.shyriImgBox")
+                count_now = len(cards_now)
+            except Exception:
+                count_now = 0
+            if count_now > prev_count:
+                break
+
+        if count_now <= prev_count:
+            stagnant += 1
+            # Adaptive backoff if the page is slow to load additional batches.
+            time.sleep(min(1.5 * stagnant, 6))
+        else:
+            stagnant = 0
+            prev_count = count_now
+
+        if target_cards and count_now >= target_cards:
+            logger.debug(f"Loaded {count_now} cards (target {target_cards}) — stopping scroll")
+            break
+        if stagnant >= max_stagnant:
+            logger.debug(f"No new cards after {stagnant} scrolls — stopping scroll")
+            break
+
+        logger.debug(f"Scroll {scroll_num}/{max_scrolls} done — cards: {count_now}")
 
     # ── Parse all cards ───────────────────────────────────────────────────────
     logger.info("Parsing poetry cards...")
