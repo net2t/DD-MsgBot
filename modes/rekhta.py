@@ -125,14 +125,20 @@ def run(driver, sheets: SheetsManager, logger: Logger,
 
         # Column D (URDU) formula: translate Column C (TITLE) for the same row.
         # Using INDIRECT+ROW avoids hardcoding the row number.
-        urdu_formula = '=GOOGLETRANSLATE(INDIRECT("C"&ROW()),"en","ur")'
+        urdu_formula = (
+            '=GOOGLETRANSLATE('
+            'INDIRECT("C"&ROW())&" - by "&INDIRECT("F"&ROW()),'
+            '"en","ur")'
+        )
+
+        title = item["roman_text"].strip()
 
         # Build the row matching Config.POST_QUEUE_COLS order:
         # STATUS, TYPE, TITLE, URDU, IMG_LINK, POET, POST_URL, ADDED, NOTES
         row_values = [
             "Pending",              # STATUS
             "image",               # TYPE
-            item["roman_text"],    # TITLE (Roman Urdu — kept for reference)
+            title,                  # TITLE (Roman Urdu — kept for reference)
             urdu_formula,          # URDU  (Sheets formula)
             item["img_link"],      # IMG_LINK
             item["poet"],          # POET
