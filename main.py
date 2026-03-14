@@ -1,22 +1,30 @@
 """
 main.py — DD-Msg-Bot V2
+━━━━━━━━━━━━━━━━━━━━━━━
 Entry point for all bot modes.
 
-Usage:
-    python main.py msg       → Message Mode
-    python main.py post      → Post Mode
-    python main.py rekhta    → Rekhta (Populate PostQueue) Mode
-    python main.py inbox     → Inbox Mode (sync conversations + send replies)
-    python main.py activity  → Activity Mode (log activity feed)
-    python main.py logs      → Show recent MasterLog entries
-    python main.py setup     → Create/repair all sheets
+CLI usage (GitHub Actions / direct):
+    python main.py msg            → Message Mode
+    python main.py post           → Post Mode
+    python main.py rekhta         → Rekhta Mode
+    python main.py inbox          → Inbox Mode
+    python main.py activity       → Activity Mode
+    python main.py logs           → View recent MasterLog entries
+    python main.py setup          → Create / repair sheets
+    python main.py format         → Apply formatting to all sheets
 
 Options:
     --max N    Process only N items (0 = unlimited)
     --debug    Verbose debug logging
+    --headless Force headless browser
+
+Local interactive menu:
+    python main.py
+    (no arguments — shows a numbered menu)
 """
 
 import sys
+import os
 import argparse
 
 from config import Config
@@ -33,34 +41,123 @@ import modes.logs     as logs_mode
 import modes.setup    as setup_mode
 
 
-def _build_parser():
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CLI Argument Parser
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Define all CLI arguments."""
     p = argparse.ArgumentParser(
         prog="main.py",
         description=f"DD-Msg-Bot V{Config.VERSION} — DamaDam automation bot",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
-        "mode",
-        choices=["msg", "post", "rekhta", "inbox", "activity", "logs", "setup"],
-        help="Which mode to run",
+        "mode", nargs="?",  # Optional — if missing, we show interactive menu
+        choices=["msg", "post", "rekhta", "inbox", "activity",
+                 "logs", "setup", "format"],
+        help="Which mode to run (omit for interactive menu)",
     )
     p.add_argument(
         "--max", dest="max_items", type=int, default=0, metavar="N",
         help="Maximum items to process (0 = unlimited)",
     )
-    p.add_argument("--debug", dest="debug", action="store_true",
-                   help="Verbose debug logging")
-    p.add_argument("--headless", dest="headless", action="store_true", default=None,
-                   help="Force headless browser")
+    p.add_argument(
+        "--debug", dest="debug", action="store_true",
+        help="Enable verbose debug logging",
+    )
+    p.add_argument(
+        "--headless", dest="headless", action="store_true", default=None,
+        help="Force headless browser mode",
+    )
     return p
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Interactive Local Menu
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_MENU = """
+╔══════════════════════════════════════════════════════════╗
+║           DD-Msg-Bot V{ver}  —  DamaDam.pk Bot           ║
+╠══════════════════════════════════════════════════════════╣
+║                                                          ║
+║   1.  ✡  Rekhta     Scrape Rekhta & fill PostQueue      ║
+║   2.  ✡  Message    Send messages to MsgList targets     ║
+║   3.  ✡  Post       Create posts from PostQueue          ║
+║   4.  ✡  Inbox      Sync inbox & send pending replies    ║
+║   5.  ✡  Activity   Log DamaDam activity feed            ║
+║   6.  ✡  View Logs  Show recent MasterLog entries        ║
+║   7.  ✡  Settings                                        ║
+║            ├─ 7a  Setup    Create / repair all sheets    ║
+║            └─ 7b  Format   Apply Lexend font + styling   ║
+║                                                          ║
+║   0.  Exit                                               ║
+╚══════════════════════════════════════════════════════════╝
+"""
+
+def _interactive_menu() -> tuple:
+    """
+    Show the welcome menu in the terminal and return (mode, max_items, debug).
+    Loops until the user makes a valid choice.
+    """
+    print(_MENU.format(ver=Config.VERSION))
+
+    # Ask for max_items once (after mode selection)
+    while True:
+        raw = input("  Enter choice: ").strip()
+
+        mode_map = {
+            "1": "rekhta",
+            "2": "msg",
+            "3": "post",
+            "4": "inbox",
+            "5": "activity",
+            "6": "logs",
+            "7a": "setup",
+            "7b": "format",
+            "0": None,
+        }
+
+        if raw not in mode_map:
+            print("  ⚠  Invalid choice — enter 1–7b or 0 to exit.\n")
+            continue
+
+        mode = mode_map[raw]
+        if mode is None:
+            print("  Goodbye!\n")
+            sys.exit(0)
+
+        # For modes that support --max, ask for a limit
+        max_items = 0
+        if mode in ("rekhta", "msg", "post"):
+            limit_raw = input(
+                f"  Max items to process? (press Enter for unlimited): "
+            ).strip()
+            if limit_raw.isdigit():
+                max_items = int(limit_raw)
+
+        # Debug toggle
+        debug_raw = input("  Enable debug logging? (y/N): ").strip().lower()
+        debug = debug_raw in ("y", "yes")
+
+        return mode, max_items, debug
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Mode Runners
+# ═══════════════════════════════════════════════════════════════════════════════
+
 def _run_with_browser(mode: str, args) -> None:
-    """Runner for modes that need a browser."""
+    """
+    Shared runner for modes that need a browser.
+    Starts Chrome, logs in (except Rekhta), connects to Sheets, runs the mode.
+    """
     logger = Logger(mode)
     logger.section(f"DD-Msg-Bot V{Config.VERSION} — {mode.upper()} MODE")
     Config.validate()
 
-    bm = BrowserManager(logger)
+    bm     = BrowserManager(logger)
     driver = bm.start()
     if not driver:
         logger.error("Browser failed to start — aborting")
@@ -79,7 +176,7 @@ def _run_with_browser(mode: str, args) -> None:
             logger.error("Google Sheets connection failed — aborting")
             sys.exit(1)
 
-        max_n = args.max_items
+        max_n = getattr(args, "max_items", 0)
 
         if mode == "msg":
             message_mode.run(driver, sheets, logger, max_targets=max_n)
@@ -97,7 +194,10 @@ def _run_with_browser(mode: str, args) -> None:
 
 
 def _run_sheets_only(mode: str, args) -> None:
-    """Runner for modes that only need Sheets (no browser)."""
+    """
+    Runner for modes that only need Google Sheets — no browser started.
+    Covers: logs, setup, format.
+    """
     logger = Logger(mode)
     Config.validate()
 
@@ -110,18 +210,37 @@ def _run_sheets_only(mode: str, args) -> None:
         logs_mode.run(sheets, logger, last_n=30)
     elif mode == "setup":
         setup_mode.run(sheets, logger)
+    elif mode == "format":
+        setup_mode.run_format(sheets, logger)
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Main
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
     parser = _build_parser()
     args   = parser.parse_args()
 
-    if args.debug:
+    # Apply CLI overrides to Config
+    if getattr(args, "debug", False):
         Config.DEBUG = True
-    if args.headless:
+    if getattr(args, "headless", None):
         Config.HEADLESS = True
 
     mode = args.mode
+
+    # ── No mode given and NOT in CI → show interactive menu ──────────────────
+    if not mode:
+        if Config.IS_CI:
+            parser.error("mode is required when running in CI / GitHub Actions")
+        mode, max_n, debug = _interactive_menu()
+        # Patch args so downstream functions see the menu choices
+        args.max_items = max_n
+        if debug:
+            Config.DEBUG = True
+
+    # ── Dispatch ─────────────────────────────────────────────────────────────
     if mode in ("msg", "post", "rekhta", "inbox", "activity"):
         _run_with_browser(mode, args)
     else:

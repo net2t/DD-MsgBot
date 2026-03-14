@@ -287,6 +287,15 @@ def _create_image_post(driver, img_url: str, caption: str,
     """
     Download an image from img_url and upload it to DamaDam.
 
+    DamaDam image upload flow:
+      1. GET /share/photo/upload/
+      2. The page loads a form with a file input and a caption textarea
+      3. After file is selected, DamaDam shows a PREVIEW before the textarea
+         becomes active — we must wait for the preview to appear
+      4. Fill caption AFTER preview loads (not before)
+      5. Set radio buttons (exp=i, com=0)
+      6. Submit and wait for redirect to /comments/image/{id}
+
     Returns:
         {"status": "Posted"|"Rate Limited"|"Repeating"|"Error: ...", "url": "..."}
     """
@@ -298,60 +307,152 @@ def _create_image_post(driver, img_url: str, caption: str,
 
         # -- Open upload page -------------------------------------------------
         driver.get(_URL_IMAGE_UPLOAD)
-        time.sleep(3)
-
-        form = _find_share_form(driver, require_file=True)
-        if not form:
-            return {"status": "Form Error", "url": ""}
-
-        # -- Upload file -------------------------------------------------------
-        file_input = form.find_element(By.CSS_SELECTOR, _SEL_FILE_INPUT)
-        abs_path   = os.path.abspath(tmp_path)
-        file_input.send_keys(abs_path)
-        # Wait for the file input to register the file
+        # Wait for the page to fully load — specifically for the file input
         try:
             WebDriverWait(driver, 15).until(
-                lambda d: bool((file_input.get_attribute("value") or "").strip())
-            )
-        except Exception:
-            pass
-        time.sleep(2)
-
-        # -- Fill caption (Urdu text) -----------------------------------------
-        clean_cap = sanitize_caption(strip_non_bmp(caption))
-        if clean_cap:
-            try:
-                cap_area = form.find_element(By.CSS_SELECTOR, _SEL_CAPTION)
-                cap_area.clear()
-                cap_area.send_keys(clean_cap)
-            except Exception:
-                pass
-
-        # -- Set post options (never expire, allow comments) ------------------
-        _set_radio(driver, form, "exp", "i")   # Never expire
-        _set_radio(driver, form, "com", "0")   # Allow comments
-
-        # -- Submit -----------------------------------------------------------
-        submit = form.find_element(By.CSS_SELECTOR, _SEL_SUBMIT)
-        logger.debug("Submitting image post...")
-        driver.execute_script("arguments[0].click();", submit)
-        try:
-            WebDriverWait(driver, 15).until(
-                lambda d: d.current_url != _URL_IMAGE_UPLOAD
+                EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='file']"))
             )
         except TimeoutException:
             pass
         time.sleep(2)
 
-        # -- Detect issues ----------------------------------------------------
+        # -- Find the file input (search whole page, not inside form) ---------
+        # DamaDam's file input is sometimes outside a <form> tag or uses JS handling.
+        # We search the full page rather than inside a form element.
+        file_input = None
+        for sel in (
+            "input[type='file'][name='image']",
+            "input[type='file'][name='file']",
+            "input[type='file'][name='photo']",
+            "input[type='file']",
+        ):
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+            if els:
+                file_input = els[0]
+                break
+
+        if not file_input:
+            logger.warning("File input not found on upload page")
+            return {"status": "Form Error: no file input", "url": ""}
+
+        # -- Send the file path to the input ----------------------------------
+        abs_path = os.path.abspath(tmp_path)
+        logger.debug(f"Uploading: {abs_path}")
+        file_input.send_keys(abs_path)
+
+        # -- Wait for upload preview to appear --------------------------------
+        # DamaDam shows a thumbnail/preview after the file is selected.
+        # The caption textarea only becomes properly interactive AFTER this.
+        # We wait up to 15s for the preview image or a hidden-state change.
+        preview_appeared = False
+        for _ in range(15):
+            time.sleep(1)
+            try:
+                # Preview appears as an img tag or a div with background-image
+                previews = driver.find_elements(
+                    By.CSS_SELECTOR,
+                    "img.uploadPreview, div.uploadPreview, img[src*='blob:'], "
+                    "img[src*='data:image'], .preview img, #preview img, "
+                    "img[id*='preview'], img[class*='preview']"
+                )
+                if previews:
+                    preview_appeared = True
+                    break
+                # Fallback: check if the file input value is set
+                val = (file_input.get_attribute("value") or "").strip()
+                if val:
+                    preview_appeared = True
+                    break
+            except Exception:
+                pass
+
+        if not preview_appeared:
+            # Still try — some DamaDam versions don't show a visible preview
+            logger.debug("Preview not confirmed — proceeding anyway after wait")
+        time.sleep(2)
+
+        # -- Fill caption AFTER preview loads ---------------------------------
+        clean_cap = sanitize_caption(strip_non_bmp(caption))
+        if clean_cap:
+            # The caption textarea may be inside or outside the upload form
+            # Try multiple selectors targeting common DamaDam textarea names
+            cap_filled = False
+            for sel in (
+                "textarea[name='description']",
+                "textarea[name='caption']",
+                "textarea[name='text']",
+                "textarea[name='body']",
+                "textarea",
+            ):
+                try:
+                    areas = driver.find_elements(By.CSS_SELECTOR, sel)
+                    if areas:
+                        areas[0].clear()
+                        time.sleep(0.3)
+                        areas[0].send_keys(clean_cap)
+                        cap_filled = True
+                        logger.debug(f"Caption filled ({len(clean_cap)} chars) via {sel}")
+                        break
+                except Exception:
+                    continue
+            if not cap_filled:
+                logger.warning("Could not find caption textarea — posting without caption")
+
+        # -- Set post options -------------------------------------------------
+        # exp=i → Never expire  |  com=0 → Allow comments
+        # These radios are searched page-wide (not form-scoped)
+        for name, value in (("exp", "i"), ("com", "0")):
+            try:
+                radio = driver.find_element(
+                    By.CSS_SELECTOR,
+                    f"input[type='radio'][name='{name}'][value='{value}']"
+                )
+                if not radio.is_selected():
+                    driver.execute_script("arguments[0].click();", radio)
+            except Exception:
+                pass
+
+        # -- Find and click submit --------------------------------------------
+        submit = None
+        for sel in (
+            "button[type='submit'][name='dec'][value='1']",
+            "input[type='submit'][name='dec'][value='1']",
+            "button[type='submit']",
+            "input[type='submit']",
+        ):
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+            if els:
+                submit = els[0]
+                break
+
+        if not submit:
+            return {"status": "Form Error: no submit button", "url": ""}
+
+        logger.debug("Submitting image post...")
+        driver.execute_script("arguments[0].click();", submit)
+
+        # -- Wait for redirect after submit -----------------------------------
+        # DamaDam redirects to /comments/image/{id} on success
+        try:
+            WebDriverWait(driver, 20).until(
+                lambda d: (
+                    "/comments/image/" in d.current_url
+                    or "/content/" in d.current_url
+                    or (d.current_url != _URL_IMAGE_UPLOAD
+                        and "upload" not in d.current_url.lower())
+                )
+            )
+        except TimeoutException:
+            pass
+        time.sleep(2)
+
+        # -- Detect rate limit or duplicate -----------------------------------
         page = driver.page_source.lower()
 
-        # Rate limit detection (DamaDam shows a message about time remaining)
         wait_s = _detect_rate_limit(page)
         if wait_s:
             return {"status": "Rate Limited", "url": driver.current_url, "wait_seconds": wait_s}
 
-        # Duplicate/repeating image detection
         if _detect_repeating_image(page):
             return {"status": "Repeating", "url": driver.current_url}
 
@@ -363,15 +464,19 @@ def _create_image_post(driver, img_url: str, caption: str,
         if "/comments/image/" in post_url or "/content/" in post_url:
             return {"status": "Posted", "url": post_url}
 
+        # If URL still looks like an upload page, check for error messages
+        if "upload" in driver.current_url.lower():
+            err_text = _extract_error_message(driver)
+            return {"status": f"Upload Error: {err_text}", "url": driver.current_url}
+
         return {"status": "Pending Verification", "url": post_url}
 
     except RuntimeError as e:
-        # download_image raises RuntimeError on failure
         return {"status": f"Image Download Failed: {str(e)[:60]}", "url": ""}
     except Exception as e:
         return {"status": f"Error: {str(e)[:60]}", "url": ""}
     finally:
-        # Always clean up the temp file
+        # Always clean up the temp file regardless of outcome
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
@@ -448,16 +553,16 @@ def _create_text_post(driver, content: str, logger: Logger) -> Dict:
 def _find_share_form(driver, require_file: bool = False):
     """
     Find the share/upload form on the current page.
-    If require_file=True, only returns forms that contain a file input.
+    Searches page-wide (not just inside <form> tags) because DamaDam
+    sometimes uses JS-handled forms that don't wrap inputs properly.
     """
     try:
         forms = driver.find_elements(By.CSS_SELECTOR, "form")
         for form in forms:
             try:
                 if require_file:
-                    form.find_element(By.CSS_SELECTOR, _SEL_FILE_INPUT)
+                    form.find_element(By.CSS_SELECTOR, "input[type='file']")
                 else:
-                    # For text forms, look for a textarea
                     form.find_element(By.CSS_SELECTOR, "textarea")
                 return form
             except Exception:
@@ -465,6 +570,26 @@ def _find_share_form(driver, require_file: bool = False):
         return None
     except Exception:
         return None
+
+
+def _extract_error_message(driver) -> str:
+    """
+    Try to find and return a visible error message on the current page.
+    Used when the upload page doesn't redirect — helps with debugging.
+    """
+    for sel in (
+        ".errorlist li", ".alert-danger", ".error", "div.err",
+        "p.error", "span.error", ".messages li",
+    ):
+        try:
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+            if els:
+                text = (els[0].text or "").strip()
+                if text:
+                    return text[:80]
+        except Exception:
+            pass
+    return "unknown error — check page manually"
 
 
 def _set_radio(driver, form, name: str, value: str):

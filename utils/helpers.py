@@ -7,7 +7,6 @@ Covers:
   - Image download (URL → temp file)
   - Caption / tag text sanitization
   - Urdu script conversion via Claude API
-  - PKT timestamp generation
   - URL cleaning and validation
 """
 
@@ -17,22 +16,11 @@ import tempfile
 import urllib.request
 import urllib.error
 import time
-from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
 
 from config import Config
-
-
-# ── Pakistan Standard Time ─────────────────────────────────────────────────────
-PKT = timezone(timedelta(hours=5))
-
-def now_pkt() -> datetime:
-    """Return current datetime in Pakistan Standard Time."""
-    return datetime.now(tz=PKT)
-
-def pkt_stamp() -> str:
-    """Human-readable PKT timestamp: '12-Mar-26 03:45 AM'"""
-    return now_pkt().strftime("%d-%b-%y %I:%M %p")
+# pkt_stamp and now_pkt defined in utils/logger.py — single source of truth
+from utils.logger import pkt_stamp, now_pkt
 
 
 # ── Image Helpers ──────────────────────────────────────────────────────────────
