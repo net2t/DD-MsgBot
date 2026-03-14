@@ -35,3 +35,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 damadam_cookies.pkl
+# Exclude .windsurf folder
+.windsurf/
+!.windsurf/plans/
