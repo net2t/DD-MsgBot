@@ -89,7 +89,7 @@ def run(sheets: SheetsManager, logger: Logger):
 def run_format(sheets: SheetsManager, logger: Logger):
     """
     Apply consistent visual formatting to all queue + log sheets:
-      - Font:             Lexend, size 10
+      - Font:             Lexend, size 8
       - Horizontal align: CENTER for all cells
       - Vertical align:   MIDDLE for all cells
       - Text wrapping:    CLIP (no overflow, no wrap)
@@ -148,7 +148,7 @@ def run_format(sheets: SheetsManager, logger: Logger):
                     "range": {"sheetId": sheet_id},
                     "cell": {
                         "userEnteredFormat": {
-                            "textFormat":          {"fontFamily": "Lexend", "fontSize": 10},
+                            "textFormat":          {"fontFamily": "Lexend", "fontSize": 8},
                             "horizontalAlignment": "CENTER",
                             "verticalAlignment":   "MIDDLE",
                             "wrapStrategy":        "CLIP",
@@ -175,8 +175,8 @@ def run_format(sheets: SheetsManager, logger: Logger):
                             "backgroundColor": HEADER_BG,
                             "textFormat": {
                                 "fontFamily":      "Lexend",
-                                "fontSize":        10,
-                                "bold":            True,
+                                "fontSize":        8,
+                                "bold":            False,
                                 "foregroundColor": HEADER_TEXT,
                             },
                             "horizontalAlignment": "CENTER",
