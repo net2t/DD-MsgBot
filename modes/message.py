@@ -372,11 +372,26 @@ def _send_message(driver, post_url: str, message: str,
         if len(safe_msg) > 350:
             safe_msg = safe_msg[:350]
 
-        # -- Type message ------------------------------------------------------
-        textarea.clear()
+        # -- Scroll textarea into view before typing ----------------------------
+        # ChromeDriver raises "element not interactable" if the element is
+        # off-screen. scrollIntoView brings it to the viewport first.
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", textarea)
+        time.sleep(0.5)
+
+        # -- Type message via JavaScript (most reliable in headless Chrome) ---
+        # send_keys can fail on off-screen or readonly-style textareas.
+        # Setting .value via JS + firing input/change events is more robust.
+        driver.execute_script(
+            "arguments[0].value = arguments[1];"
+            "arguments[0].dispatchEvent(new Event('input',  {bubbles:true}));"
+            "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+            textarea, safe_msg
+        )
+        time.sleep(0.5)
+
+        # -- Scroll submit button into view and click -------------------------
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", submit_btn)
         time.sleep(0.3)
-        textarea.send_keys(safe_msg)
-        time.sleep(1)
 
         # -- Submit ------------------------------------------------------------
         logger.debug("Submitting reply...")
@@ -436,8 +451,10 @@ def _process_template(template: str, profile: Dict) -> str:
     Empty/missing values are removed cleanly — no leftover commas or spaces.
     """
     msg = template
+    # If NAME is empty, fall back to NICK so {{name}} is never blank
+    name_val = (profile.get("NAME") or "").strip() or (profile.get("NICK") or "").strip()
     replacements = {
-        "{{name}}":      (profile.get("NAME") or "").strip(),
+        "{{name}}":      name_val,
         "{{nick}}":      (profile.get("NICK") or "").strip(),
         "{{city}}":      (profile.get("CITY") or "").strip(),
         "{{posts}}":     str(profile.get("POSTS") or "").strip(),
