@@ -560,7 +560,7 @@ def _create_image_post(driver, img_url: str, caption: str,
         time.sleep(2)
 
         # -- Verify post on profile if redirected -----------------------------
-        if "/profile/public/" in driver.current_url:
+        if "/profile/public/" in driver.current_url or "/users/" in driver.current_url:
             logger.debug("Redirected to profile; verifying most recent post...")
             # TODO: Add verification logic to check the most recent post content matches
             # For now, assume success if we're on the profile page
@@ -574,6 +574,8 @@ def _create_image_post(driver, img_url: str, caption: str,
             return {"status": "Rate Limited", "url": driver.current_url, "wait_seconds": wait_s}
 
         if _detect_repeating_image(page):
+            if Config.DEBUG:
+                _dump_debug_artifacts(driver, logger, "repeating_image")
             return {"status": "Repeating", "url": driver.current_url}
 
         # -- Extract posted URL -----------------------------------------------
@@ -590,6 +592,10 @@ def _create_image_post(driver, img_url: str, caption: str,
             if Config.DEBUG:
                 _dump_debug_artifacts(driver, logger, "upload_error_image")
             return {"status": f"Upload Error: {err_text}", "url": driver.current_url}
+
+        # Debug dump for pending verification to understand the page state
+        if Config.DEBUG:
+            _dump_debug_artifacts(driver, logger, "pending_verification")
 
         return {"status": "Pending Verification", "url": post_url}
 
@@ -776,7 +782,7 @@ def _detect_repeating_image(page_source: str) -> bool:
     Returns True if duplicate image indicators are found.
     """
     indicators = [
-        "repeat", "already posted", "duplicate",
+        "already posted",
         "dobara", "doosri baar",  # Urdu/Roman Urdu variants
         "phir se",
     ]
