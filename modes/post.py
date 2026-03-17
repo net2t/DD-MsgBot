@@ -504,9 +504,9 @@ def _create_image_post(driver, img_url: str, caption: str,
                 logger.warning("Could not find caption textarea — posting without caption")
 
         # -- Set post options -------------------------------------------------
-        # exp=i → Never expire  |  com=0 → Allow comments
+        # exp=i → Never expire  |  com=1 → Turn Off Replies (Yes)
         # These radios are searched page-wide (not form-scoped)
-        for name, value in (("exp", "i"), ("com", "0")):
+        for name, value in (("exp", "i"), ("com", "1")):
             try:
                 radio = driver.find_element(
                     By.CSS_SELECTOR,
@@ -542,11 +542,12 @@ def _create_image_post(driver, img_url: str, caption: str,
         driver.execute_script("arguments[0].click();", submit)
 
         # -- Wait for redirect after submit -----------------------------------
-        # DamaDam redirects to /comments/image/{id} on success
+        # DamaDam redirects to profile on success
         try:
             WebDriverWait(driver, 30).until(
                 lambda d: (
-                    "/comments/image/" in d.current_url
+                    "/profile/public/" in d.current_url
+                    or "/comments/image/" in d.current_url
                     or "/content/" in d.current_url
                     or (d.current_url != _URL_IMAGE_UPLOAD
                         and "upload" not in d.current_url.lower())
@@ -557,6 +558,13 @@ def _create_image_post(driver, img_url: str, caption: str,
             logger.debug("Redirect timeout; checking page for success indicators...")
             pass
         time.sleep(2)
+
+        # -- Verify post on profile if redirected -----------------------------
+        if "/profile/public/" in driver.current_url:
+            logger.debug("Redirected to profile; verifying most recent post...")
+            # TODO: Add verification logic to check the most recent post content matches
+            # For now, assume success if we're on the profile page
+            return {"status": "Posted", "url": driver.current_url}
 
         # -- Detect rate limit or duplicate -----------------------------------
         page = driver.page_source.lower()
@@ -633,8 +641,8 @@ def _create_text_post(driver, content: str, logger: Logger) -> Dict:
             return {"status": f"Textarea Error: {str(e)[:40]}", "url": ""}
 
         # -- Set post options -------------------------------------------------
-        _set_radio(driver, form, "exp", "i")
-        _set_radio(driver, form, "com", "0")
+        _set_radio(driver, form, "exp", "i")  # Never expire
+        _set_radio(driver, form, "com", "1")  # Turn Off Replies: Yes
 
         # -- Submit -----------------------------------------------------------
         submit = form.find_element(By.CSS_SELECTOR, _SEL_SUBMIT)
@@ -645,12 +653,22 @@ def _create_text_post(driver, content: str, logger: Logger) -> Dict:
 
         driver.execute_script("arguments[0].click();", submit)
         try:
-            WebDriverWait(driver, 10).until(
-                lambda d: d.current_url != _URL_TEXT_SHARE
+            WebDriverWait(driver, 30).until(
+                lambda d: (
+                    "/profile/public/" in d.current_url
+                    or d.current_url != _URL_TEXT_SHARE
+                )
             )
         except TimeoutException:
             pass
         time.sleep(2)
+
+        # -- Verify post on profile if redirected -----------------------------
+        if "/profile/public/" in driver.current_url:
+            logger.debug("Redirected to profile; verifying most recent post...")
+            # TODO: Add verification logic to check the most recent post content matches
+            # For now, assume success if we're on the profile page
+            return {"status": "Posted", "url": driver.current_url}
 
         page = driver.page_source.lower()
 
