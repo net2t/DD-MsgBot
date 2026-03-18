@@ -435,23 +435,15 @@ def _create_image_post(driver, img_url: str, caption: str, logger: Logger) -> Di
                 logger.warning("Caption fill failed — posting without caption")
 
         # ── Step 6: Set radio options ─────────────────────────────────────────
-        #   exp=i → Never expire
-        #   com=1 → Turn Off Replies (so comments = no = replies turned off)
+        #   exp=i  → Never expire post    → click label[for='exp-first']
+        #   com=1  → Turn Off Replies Yes → click label[for='com-on']
         #
-        # NOTE: We intentionally do NOT set com=0 (allow replies) because the
-        # original code set com=1. Keep original intent.
-        for name, value in (("exp", "i"), ("com", "1")):
-            try:
-                radio = driver.find_element(
-                    By.CSS_SELECTOR,
-                    f"input[type='radio'][name='{name}'][value='{value}']"
-                )
-                if not radio.is_selected():
-                    driver.execute_script("arguments[0].click();", radio)
-                    logger.debug(f"Radio set: {name}={value}")
-            except Exception:
-                logger.debug(f"Radio not found: {name}={value} (may not exist on this form)")
-
+        # DamaDam uses hidden radio inputs (class="checkbox", opacity:0)
+        # with visible <label for="..."> elements styled via CSS.
+        # Clicking the hidden input does nothing — must click the label.
+        # Label IDs confirmed from HTML dump of the upload page.
+        _click_radio_label(driver, logger, "exp-first", "Never expire post")
+        _click_radio_label(driver, logger, "com-on",    "Turn Off Replies: Yes")
         _dump(driver, logger, "03_before_submit")
 
         # ── Step 7: Find and click submit ─────────────────────────────────────
@@ -566,8 +558,8 @@ def _create_text_post(driver, content: str, logger: Logger) -> Dict:
             _dump(driver, logger, "ERROR_text_textarea_not_found")
             return {"status": "Text form: textarea not found", "url": driver.current_url}
 
-        _set_radio_safe(driver, logger, "exp", "i")
-        _set_radio_safe(driver, logger, "com", "1")
+        _click_radio_label(driver, logger, "exp-first", "Never expire post")
+        _click_radio_label(driver, logger, "com-on",    "Turn Off Replies: Yes")
 
         _dump(driver, logger, "02_text_before_submit")
 
@@ -753,17 +745,26 @@ def _find_submit_button(driver, logger: Logger):
     return None
 
 
-def _set_radio_safe(driver, logger: Logger, name: str, value: str):
-    """Set a radio button by name+value. Silently skip if not found."""
+def _click_radio_label(driver, logger: Logger, label_for: str, description: str = ""):
+    """
+    Click a DamaDam radio option by targeting its <label for="..."> element.
+
+    DamaDam's radio inputs have class="checkbox" with CSS opacity:0 — they are
+    visually hidden. The user sees only the styled <label> elements. Clicking
+    the hidden input via JS does nothing to the UI state. We must click the
+    label instead, which triggers the browser's native label-input binding.
+
+    Args:
+        label_for:   The 'for' attribute value of the label (= radio input id)
+                     e.g. "exp-first" for Never expire, "com-on" for Turn Off Replies Yes
+        description: Human-readable name for logging
+    """
     try:
-        radio = driver.find_element(
-            By.CSS_SELECTOR,
-            f"input[type='radio'][name='{name}'][value='{value}']"
-        )
-        if not radio.is_selected():
-            driver.execute_script("arguments[0].click();", radio)
-    except Exception:
-        pass
+        label = driver.find_element(By.CSS_SELECTOR, f"label[for='{label_for}']")
+        driver.execute_script("arguments[0].click();", label)
+        logger.info(f"Radio selected: {description} (label[for={label_for!r}])")
+    except Exception as e:
+        logger.warning(f"Could not select radio '{description}' (label[for={label_for!r}]): {e}")
 
 
 def _detect_rate_limit(page_source: str) -> int:
