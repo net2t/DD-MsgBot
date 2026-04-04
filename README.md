@@ -8,7 +8,7 @@ Manages messaging, image posting, Rekhta poetry scraping, and inbox replies — 
 ## Modes
 
 | Mode | What it does |
-|------|-------------|
+|------|--------------|
 | `rekhta` | Scrape poetry image cards from rekhta.org → populate PostQueue sheet |
 | `msg` | Send messages to targets listed in MsgList sheet |
 | `post` | Create image/text posts from PostQueue sheet |
@@ -23,6 +23,7 @@ Manages messaging, image posting, Rekhta poetry scraping, and inbox replies — 
 ## Quick Start (Local)
 
 ### 1. Install dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -34,12 +35,14 @@ pip install -r requirements.txt
 4. Share your Google Sheet with the service account email (Editor access)
 
 ### 3. Create `.env`
+
 ```bash
 cp .env.sample .env
 # Fill in your values
 ```
 
 Minimum required:
+
 ```env
 DD_LOGIN_EMAIL=your_damadam_username
 DD_LOGIN_PASS=your_password
@@ -48,14 +51,17 @@ CREDENTIALS_FILE=credentials.json
 ```
 
 ### 4. Create sheets
+
 ```bash
 python main.py setup
 ```
 
 ### 5. Run (interactive menu)
+
 ```bash
 python main.py
 ```
+
 Running with no arguments shows a numbered menu — no flags needed.
 
 ---
@@ -67,13 +73,14 @@ python main.py <mode> [--max N] [--debug] [--headless]
 ```
 
 | Argument | Description |
-|----------|-------------|
+|----------|--------------|
 | `mode` | One of: `rekhta msg post inbox activity logs setup format` |
 | `--max N` | Process only N items (default: 0 = unlimited) |
 | `--debug` | Verbose debug output |
 | `--headless` | Force headless browser (auto-enabled in CI) |
 
 **Examples:**
+
 ```bash
 python main.py msg --max 5          # Send to 5 targets only
 python main.py post --max 1         # Post 1 item (safe test)
@@ -102,7 +109,7 @@ A single workflow file (`.github/workflows/bot.yml`) handles all 5 scheduled run
 ### Required GitHub Secrets
 
 | Secret | Description |
-|--------|-------------|
+|--------|--------------|
 | `DD_LOGIN_EMAIL` | DamaDam username (nick) |
 | `DD_LOGIN_PASS` | DamaDam password |
 | `DD_SHEET_ID` | Google Sheets ID |
@@ -116,10 +123,11 @@ A single workflow file (`.github/workflows/bot.yml`) handles all 5 scheduled run
 ## Sheet Structure
 
 ### MsgList
+
 Targets for Message Mode.
 
 | Column | Description |
-|--------|-------------|
+|--------|--------------|
 | MODE | Nick or URL |
 | NAME | Display name (your reference) |
 | NICK | DamaDam username or profile URL |
@@ -133,10 +141,11 @@ Targets for Message Mode.
 | RESULT | URL of the post where message was sent |
 
 ### PostQueue
+
 Queue for Post Mode. Populated by Rekhta Mode.
 
 | Column | Description |
-|--------|-------------|
+|--------|--------------|
 | STATUS | `Pending` → `Done` / `Failed` / `Repeating` |
 | TYPE | `image` or `text` |
 | TITLE | Roman Urdu first line (reference) |
@@ -148,10 +157,11 @@ Queue for Post Mode. Populated by Rekhta Mode.
 | NOTES | Error details set by bot |
 
 ### InboxQueue
+
 Inbox reply queue for Inbox Mode.
 
 | Column | Description |
-|--------|-------------|
+|--------|--------------|
 | NICK | DamaDam username |
 | NAME | Display name |
 | LAST_MSG | Last message received |
@@ -161,10 +171,11 @@ Inbox reply queue for Inbox Mode.
 | NOTES | Set by bot |
 
 ### MasterLog
+
 All bot activity is logged here automatically.
 
 | Column | Description |
-|--------|-------------|
+|--------|--------------|
 | TIMESTAMP | PKT timestamp |
 | MODE | Which mode ran |
 | ACTION | What action was performed |
