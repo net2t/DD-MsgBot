@@ -86,12 +86,10 @@ class Config:
 
     # Queue sheets  — bot reads from these to know what to do
     SHEET_MSG_QUE      = "MsgQue"         # Message targets queue
-    SHEET_POST_QUE     = "PostQue"        # Post content queue (populated by Rekhta mode)
     SHEET_MESSAGE_QUEUE = "MessageQueue"   # Unified message queue (replaces InboxQue)
 
     # Log sheets    — bot writes results here after each action
     SHEET_MSG_LOG      = "MsgLog"         # Every message sent (history per target)
-    SHEET_POST_LOG     = "PostLog"        # Every post created (history per post)
     SHEET_MESSAGE_LOG  = "MessageLog"     # Unified message log (replaces InboxLog)
 
     # Master log    — one row per any action across all modes
@@ -106,7 +104,6 @@ class Config:
     # ── Keep old names as aliases so existing code doesn't break ──────────────
     SHEET_MASTER_LOG = SHEET_LOGS              # backwards compat alias
     SHEET_MSG_LIST   = SHEET_MSG_QUE           # backwards compat alias
-    SHEET_POST_QUEUE = SHEET_POST_QUE          # backwards compat alias
     SHEET_INBOX_QUE  = SHEET_MESSAGE_QUEUE     # backwards compat alias
     SHEET_INBOX_LOG  = SHEET_MESSAGE_LOG       # backwards compat alias
 
@@ -141,33 +138,6 @@ class Config:
         "POST_URL",   # E  URL of post the message was sent on
         "STATUS",     # F  Sent / Failed / Skipped
         "NOTES",      # G  Error or extra detail
-    ]
-
-    # ── PostQue — post content queue ──────────────────────────────────────────
-    #  Populated by Rekhta mode. Bot reads it and creates posts.
-    POST_QUE_COLS = [
-        "STATUS",     # A  Pending → Done / Failed / Skipped / Repeating
-        "TYPE",       # B  image / text
-        "TITLE",      # C  Roman Urdu first line (reference)
-        "URDU",       # D  Urdu caption — use =GOOGLETRANSLATE() formula here
-        "IMG_LINK",   # E  Full image URL from Rekhta
-        "POET",       # F  Poet name
-        "POST_URL",   # G  Filled by bot after successful post
-        "ADDED",      # H  Timestamp when row was scraped
-        "NOTES",      # I  Error details set by bot
-    ]
-
-    # ── PostLog — one row per post created ────────────────────────────────────
-    #  Bot appends here after every post attempt.
-    POST_LOG_COLS = [
-        "TIMESTAMP",  # A  PKT timestamp
-        "TYPE",       # B  image / text
-        "POET",       # C  Poet name
-        "TITLE",      # D  Roman Urdu first line
-        "POST_URL",   # E  URL of the created post
-        "IMG_LINK",   # F  Source image URL
-        "STATUS",     # G  Posted / Failed / Repeating / Skipped
-        "NOTES",      # H  Error or extra detail
     ]
 
     # ── MessageQueue — unified message queue (replaces InboxQue) ───────────────────
@@ -234,7 +204,6 @@ class Config:
 
     # ── Backwards compat aliases for column lists ──────────────────────────────
     MSG_LIST_COLS       = MSG_QUE_COLS
-    POST_QUEUE_COLS     = POST_QUE_COLS
     MASTER_LOG_COLS     = LOGS_COLS
     INBOX_COLS          = MESSAGE_QUEUE_COLS
     INBOX_QUE_COLS      = MESSAGE_QUEUE_COLS   # backwards compat
@@ -245,10 +214,8 @@ class Config:
     # ════════════════════════════════════════════════════════════════════════════
     ALL_SHEETS = {
         SHEET_MSG_QUE:         MSG_QUE_COLS,
-        SHEET_POST_QUE:        POST_QUE_COLS,
         SHEET_MESSAGE_QUEUE:   MESSAGE_QUEUE_COLS,
         SHEET_MSG_LOG:         MSG_LOG_COLS,
-        SHEET_POST_LOG:        POST_LOG_COLS,
         SHEET_MESSAGE_LOG:     MESSAGE_LOG_COLS,
         SHEET_LOGS:            LOGS_COLS,
         SHEET_SCRAPE_STATE:    SCRAPE_STATE_COLS,

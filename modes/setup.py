@@ -85,8 +85,8 @@ def run(sheets: SheetsManager, logger: Logger):
     except Exception as e:
         logger.warning(f"Dashboard creation failed: {e}")
 
-    logger.section("SETUP COMPLETE — All 9 sheets ready")
-    logger.info("Sheet order: MsgQue -> PostQue -> MessageQueue -> MsgLog -> PostLog -> MessageLog -> Logs -> ScrapeState -> Dashboard")
+    logger.section("SETUP COMPLETE — All 7 sheets ready")
+    logger.info("Sheet order: MsgQue -> MessageQueue -> MsgLog -> MessageLog -> Logs -> ScrapeState -> Dashboard")
 
 
 def run_format(sheets: SheetsManager, logger: Logger):
