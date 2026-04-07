@@ -1,12 +1,11 @@
 """
-main.py — DD-Msg-Bot V2 - Focused Version
+main.py — DD-Msg-Bot V4.1 - Unified Message Version
 ━━━━━━━━━━━━━━━━━━━━━━━
 Entry point for 3 core bot modes.
 
 CLI usage (GitHub Actions / direct):
     python main.py msg            → Message Mode
-    python main.py inbox          → Inbox Mode
-    python main.py activity       → Activity Mode
+    python main.py messages       → Unified Message Mode (inbox + activity)
 
 Options:
     --max N    Process only N items (0 = unlimited)
@@ -28,8 +27,8 @@ from core.browser import BrowserManager
 from core.login import LoginManager
 from core.sheets import SheetsManager
 
-import modes.message  as message_mode
-import modes.inbox    as inbox_mode
+import modes.message   as message_mode
+import modes.messages  as messages_mode
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -45,8 +44,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "mode", nargs="?",
-        choices=["msg", "inbox", "activity"],
-        help="Which mode to run (omit for interactive menu). 'activity' is an alias for 'inbox'.",
+        choices=["msg", "messages"],
+        help="Which mode to run (omit for interactive menu). 'messages' is unified inbox + activity.",
     )
     p.add_argument(
         "--max", dest="max_items", type=int, default=0, metavar="N",
@@ -81,8 +80,7 @@ _MENU = """
 ╠══════════════════════════════════════════════════════════╣
 ║                                                          ║
 ║   1.  ✡  Message    Send messages to targets             ║
-║   2.  ✡  Inbox      Sync inbox & send pending replies    ║
-║   3.  ✡  Activity   Log DamaDam activity feed            ║
+║   2.  ✡  Messages   Unified inbox & activity (NEW!)      ║
 ║                                                          ║
 ║   0.  Exit                                               ║
 ╚══════════════════════════════════════════════════════════╝
@@ -101,8 +99,7 @@ def _interactive_menu() -> tuple:
 
         mode_map = {
             "1": "msg",
-            "2": "inbox",
-            "3": "activity",
+            "2": "messages",
             "0": None,
         }
 
@@ -117,9 +114,9 @@ def _interactive_menu() -> tuple:
 
         # For modes that support --max, ask for a limit
         max_items = 0
-        if mode in ("msg", "inbox", "activity"):
+        if mode in ("msg", "messages"):
             limit_raw = input(
-                f"  Max items to process? (Enter for unlimited, 0=unlimited): "
+                f"Max items to process? (Enter for unlimited, 0=unlimited): "
             ).strip()
             if limit_raw.isdigit():
                 max_items = int(limit_raw)
@@ -161,10 +158,8 @@ def _run_with_browser(mode: str, args) -> None:
 
         if mode == "msg":
             message_mode.run(driver, sheets, logger, max_targets=max_n)
-        elif mode == "inbox":
-            inbox_mode.run_inbox(driver, sheets, logger)
-        elif mode == "activity":  # backwards-compat alias
-            inbox_mode.run_activity(driver, sheets, logger)
+        elif mode == "messages":
+            messages_mode.run_messages(driver, sheets, logger)
 
     finally:
         bm.close()
@@ -199,7 +194,7 @@ def main():
             Config.DEBUG = True
 
     # ── Dispatch ─────────────────────────────────────────────────────────────
-    if mode in ("msg", "inbox", "activity"):
+    if mode in ("msg", "messages"):
         _run_with_browser(mode, args)
     else:
         parser.error(f"Unknown mode: {mode}")

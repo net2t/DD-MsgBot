@@ -32,7 +32,7 @@ Root cause of empty posts (previous bug):
 import re
 import time
 from urllib.parse import quote
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -169,15 +169,15 @@ def run(driver, sheets: SheetsManager, logger: Logger,
         logger.info(f"[{idx}/{len(pending)}] Processing: {nick}")
 
         # -- Find an open post ------------------------------------------------
-        post_url = _find_open_post(driver, nick, logger)
+        post_url, skip_reason = _find_open_post(driver, nick, logger)
 
         if not post_url:
             logger.skip(f"{nick} — no open posts found")
             sheets.update_row_cells(ws, row_num, {
                 col_status: "Skipped",
-                col_notes:  "No open posts",
+                col_notes:  (skip_reason or "No open posts"),
             })
-            sheets.log_action("MSG", "skip", nick, "", "Skipped", "No open posts")
+            sheets.log_action("MSG", "skip", nick, "", "Skipped", (skip_reason or "No open posts"))
             stats["skipped"] += 1
             continue
 
@@ -260,14 +260,16 @@ def run(driver, sheets: SheetsManager, logger: Logger,
 #  FIND OPEN POST
 # ════════════════════════════════════════════════════════════════════════════════
 
-def _find_open_post(driver, nick_or_url: str, logger: Logger) -> Optional[str]:
+def _find_open_post(driver, nick_or_url: str, logger: Logger) -> Tuple[Optional[str], Optional[str]]:
     """
     Find an open/commentable post based on input type:
     
     1. If nickname/username: Visit profile → find posts → check which allow messaging
     2. If post URL: Directly open the post URL → check if message box is available
     
-    Returns the clean post URL or None.
+    Returns:
+        (clean_post_url, None) on success
+        (None, reason) on failure
     """
     raw_input = str(nick_or_url).strip()
     
@@ -278,15 +280,16 @@ def _find_open_post(driver, nick_or_url: str, logger: Logger) -> Optional[str]:
         logger.debug(f"Direct post URL detected: {raw_input}")
         clean_url = clean_post_url(raw_input)
         if is_valid_post_url(clean_url):
-            if _verify_post_open(driver, clean_url, logger):
+            is_open, reason = _verify_post_open(driver, clean_url, logger)
+            if is_open:
                 logger.debug(f"Direct post URL is open: {clean_url}")
-                return clean_url
+                return clean_url, None
             else:
                 logger.debug(f"Direct post URL is not open for messaging: {clean_url}")
-                return None
+                return None, reason
         else:
             logger.debug(f"Invalid post URL format: {raw_input}")
-            return None
+            return None, "Invalid post URL"
     
     # Handle nickname or profile URL
     nick = raw_input
@@ -301,6 +304,8 @@ def _find_open_post(driver, nick_or_url: str, logger: Logger) -> Optional[str]:
 
     safe_nick = quote(nick, safe="+")
     max_pages  = max(1, Config.MAX_POST_PAGES)
+
+    last_reason: Optional[str] = None
 
     for page_num in range(1, max_pages + 1):
         url = f"{Config.BASE_URL}/profile/public/{safe_nick}/?page={page_num}"
@@ -322,7 +327,7 @@ def _find_open_post(driver, nick_or_url: str, logger: Logger) -> Optional[str]:
                         clean = clean_post_url(href)
                         if is_valid_post_url(clean):
                             logger.debug(f"Found open post: {clean}")
-                            return clean
+                            return clean, None
                 except Exception:
                     continue
 
@@ -342,8 +347,11 @@ def _find_open_post(driver, nick_or_url: str, logger: Logger) -> Optional[str]:
                         candidate_urls.append(clean)
 
             for candidate in candidate_urls[:3]:  # Check up to 3 candidates
-                if _verify_post_open(driver, candidate, logger):
-                    return candidate
+                is_open, reason = _verify_post_open(driver, candidate, logger)
+                if is_open:
+                    return candidate, None
+                if reason:
+                    last_reason = last_reason or reason
 
             # Check for next page
             try:
@@ -358,29 +366,29 @@ def _find_open_post(driver, nick_or_url: str, logger: Logger) -> Optional[str]:
             break
 
     logger.debug(f"No open posts found for {nick_or_url}")
-    return None
+    return None, last_reason
 
 
-def _verify_post_open(driver, post_url: str, logger: Logger) -> bool:
+def _verify_post_open(driver, post_url: str, logger: Logger) -> tuple[bool, Optional[str]]:
     """Navigate to a post and check if the reply form is present and open."""
     try:
         driver.get(post_url)
         time.sleep(2)
         page = driver.page_source.lower()
         if "comments are closed" in page or "comments closed" in page:
-            return False
+            return False, "Comments Closed"
         if "follow to reply" in page:
-            return False
+            return False, "Follow required"
         forms = driver.find_elements(By.CSS_SELECTOR, _SEL_REPLY_FORM)
         for f in forms:
             try:
                 f.find_element(By.CSS_SELECTOR, _SEL_REPLY_TEXTAREA)
-                return True
+                return True, None
             except Exception:
                 continue
-        return False
+        return False, "No Form"
     except Exception:
-        return False
+        return False, "Error"
 
 
 # ════════════════════════════════════════════════════════════════════════════════

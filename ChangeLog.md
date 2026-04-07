@@ -1,5 +1,37 @@
  # Changelog
 
+## [4.1.0]
+
+### Major Changes
+
+- **Unified Message System**: Merged inbox and activity modes into single comprehensive `messages` mode
+- **Date-Organized Logging**: All messages now organized by date for better tracking and analysis
+- **Person Record ID**: Introduced unique identifiers (TID_NICK format) for each person
+- **Streamlined Sheets**: Reduced sheet count while maintaining full functionality
+- **Removed Unnecessary Sheets**: Eliminated RunLog and other redundant logging sheets
+
+### New Features
+
+- **MessageQueue Sheet**: Replaces InboxQue with enhanced organization by record ID and date
+- **MessageLog Sheet**: Replaces InboxLog with date-first organization for better sorting
+- **Enhanced Record Tracking**: Every person gets unique record ID for consistent tracking
+- **Unified Processing**: Single mode handles both inbox sync and activity monitoring
+
+### Updated
+
+- Incremented version to 4.1.0
+- Updated main.py to use unified message mode
+- Updated config.py with new sheet structure
+- Updated README.md with new documentation
+- Removed old mode files (inbox.py, activity.py, logs.py, populate.py)
+- Simplified interactive menu to 2 core modes
+
+### Fixed
+
+- Improved error handling for unified message processing
+- Enhanced date extraction from time strings
+- Better organization of message history
+
 ## [2.2.0]
 
 ### Major Changes
