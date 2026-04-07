@@ -83,7 +83,7 @@ def run(sheets: SheetsManager, logger: Logger):
         logger.warning(f"Dashboard creation failed: {e}")
 
     logger.section("SETUP COMPLETE — All 8 sheets ready")
-    logger.info("Sheet order: MsgQue → PostQue → InboxQue → MsgLog → PostLog → InboxLog → Logs → Dashboard")
+    logger.info("Sheet order: MsgQue -> PostQue -> InboxQue -> MsgLog -> PostLog -> InboxLog -> Logs -> Dashboard")
 
 
 def run_format(sheets: SheetsManager, logger: Logger):

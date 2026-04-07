@@ -26,15 +26,15 @@ def pkt_stamp() -> str:
 
 # ── Log level icons ────────────────────────────────────────────────────────────
 _ICONS = {
-    "INFO":    "ℹ️ ",
-    "OK":      "✅",
-    "WARNING": "⚠️ ",
-    "ERROR":   "❌",
-    "DEBUG":   "🔍",
-    "SKIP":    "⏩",
-    "POST":    "📤",
-    "MSG":     "💬",
-    "REKHTA":  "📜",
+    "INFO":    "[i]",
+    "OK":      "[OK]",
+    "WARNING": "[!]",
+    "ERROR":   "[ERR]",
+    "DEBUG":   "[DBG]",
+    "SKIP":    "[SKIP]",
+    "POST":    "[POST]",
+    "MSG":     "[MSG]",
+    "REKHTA":  "[REKHTA]",
 }
 
 
@@ -112,7 +112,7 @@ class Logger:
 
     def section(self, title: str):
         """Print a visual section separator."""
-        line = "─" * 60
+        line = "-" * 60
         print(f"\n{line}", flush=True)
         print(f"  {title}", flush=True)
         print(f"{line}", flush=True)

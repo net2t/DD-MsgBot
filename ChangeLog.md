@@ -1,5 +1,21 @@
  # Changelog
 
+## [2.1.1]
+
+### Updated
+
+- Message mode: Enhanced to handle both nicknames and direct post URLs
+- Nicknames: Search user profiles across multiple pages for open posts
+- Post URLs: Direct processing without profile scanning
+- Default MAX_POST_PAGES changed from 4 to 3 for faster processing
+- Fixed Unicode encoding issues in Windows terminal output
+
+### Fixed
+
+- Sheet structure recreation to resolve MissingNick column errors
+- Improved post URL detection and validation
+- Enhanced error handling for different input types
+
 ## [2.0.1]
 
 ### Added

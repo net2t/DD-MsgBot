@@ -54,7 +54,7 @@ class Config:
     HOME_URL  = "https://damadam.pk/"
 
     # ── Message Mode ──────────────────────────────────────────────────────────
-    MAX_POST_PAGES    = int(os.getenv("DD_MAX_POST_PAGES",    "4") or "4")
+    MAX_POST_PAGES    = int(os.getenv("DD_MAX_POST_PAGES",    "3") or "3")
     MSG_DELAY_SECONDS = float(os.getenv("DD_MSG_DELAY_SECONDS", "3") or "3")
 
     # ── Post Mode ─────────────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ class Config:
     LOG_DIR.mkdir(exist_ok=True)
 
     # ── Bot Version ────────────────────────────────────────────────────────────
-    VERSION = "2.1.0"
+    VERSION = "2.1.1"
 
     # ════════════════════════════════════════════════════════════════════════════
     #  SHEET NAMES
