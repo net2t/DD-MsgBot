@@ -1,22 +1,24 @@
-# DD-Msg-Bot V2 — DamaDam.pk Automation Bot
+# DD-Msg-Bot V2 — Focused Version (3 Core Modes)
 
-Modular, multi-mode automation bot for DamaDam.pk.  
-Manages messaging, image posting, Rekhta poetry scraping, and inbox replies — all driven by Google Sheets.
+A streamlined Python bot for DamaDam.pk focused on essential automation tasks: messaging, inbox management, and activity monitoring.
 
 ---
 
-## Modes
+## Features
 
-| Mode | What it does |
-|------|--------------|
-| `rekhta` | Scrape poetry image cards from rekhta.org → populate PostQueue sheet |
-| `msg` | Send messages to targets listed in MsgList sheet |
-| `post` | Create image/text posts from PostQueue sheet |
-| `inbox` | Sync DamaDam inbox conversations → send pending replies from InboxQueue sheet |
-| `activity` | Fetch DamaDam activity feed → log to MasterLog sheet |
-| `logs` | Print the last 30 MasterLog entries to console |
-| `setup` | Create / repair all required sheet tabs and headers |
-| `format` | Apply Lexend font, dark header row, and CENTER/MIDDLE/CLIP style to all sheets |
+- **Message Mode**: Send personalized messages to users via nicknames or direct post URLs
+- **Inbox Mode**: Sync inbox conversations and send pending replies
+- **Activity Mode**: Monitor and log DamaDam activity feed
+
+---
+
+## Key Improvements in Focused Version
+
+- **Streamlined Interface**: Only 3 core modes for focused functionality
+- **Enhanced Message Processing**: Dual input support (nicknames + direct post URLs)
+- **Separate Scope**: Inbox and Activity modes now have distinct purposes
+- **Optimized Performance**: Reduced complexity and faster execution
+- **Cleaner Codebase**: Removed unused modes and dependencies
 
 ---
 

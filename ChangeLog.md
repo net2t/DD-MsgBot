@@ -1,5 +1,29 @@
  # Changelog
 
+## [2.2.0]
+
+### Major Changes
+
+- **Focused Version**: Streamlined to 3 core modes only (msg, inbox, activity)
+- **Removed Modes**: Eliminated post, rekhta, logs, setup, format modes
+- **Separate Scope**: Inbox and Activity modes now have distinct purposes
+  - Inbox Mode: Only sync conversations and send replies
+  - Activity Mode: Only fetch and log activity feed
+
+### Updated
+
+- Enhanced message mode with dual input support (nicknames + direct post URLs)
+- Optimized MAX_POST_PAGES default from 4 to 3 for faster processing
+- Updated GitHub workflow to focus on 3 core modes
+- Changed schedule from hourly posts to every 2 hours message processing
+- Simplified interactive menu to show only 3 modes
+
+### Fixed
+
+- Fixed Unicode encoding issues in Windows terminal output
+- Resolved activity mode timestamp field error
+- Improved error handling for different input types
+
 ## [2.1.1]
 
 ### Updated

@@ -68,18 +68,15 @@ _SEL_REPLY_TEXTAREA = "textarea[name='direct_response']"
 
 def run_inbox(driver, sheets: SheetsManager, logger: Logger) -> Dict:
     """
-    Run full Inbox + Activity mode.
-
-    Phase 1: Fetch inbox  → sync InboxQue + log to InboxLog
-    Phase 2: Send replies → rows with MY_REPLY filled + STATUS=Pending
-    Phase 3: Fetch activity → log to InboxLog
-
+    Inbox mode: Sync conversations and send pending replies.
+    Phase 1: Sync new conversations from /inbox/
+    Phase 2: Send pending replies
     Returns stats dict.
     """
     import time as _time
     run_start = _time.time()
 
-    logger.section("INBOX + ACTIVITY MODE")
+    logger.section("INBOX MODE")
 
     ws_que = sheets.get_worksheet(Config.SHEET_INBOX_QUE, headers=Config.INBOX_QUE_COLS)
     ws_log = sheets.get_worksheet(Config.SHEET_INBOX_LOG, headers=Config.INBOX_LOG_COLS)
@@ -214,45 +211,62 @@ def run_inbox(driver, sheets: SheetsManager, logger: Logger) -> Dict:
 
         time.sleep(2)
 
-    # ── Phase 3: Activity feed ────────────────────────────────────────────────
-    logger.info("Phase 3: Fetching activity feed...")
-    activity_items = _fetch_activity(driver, logger, max_items=60, max_pages=5)
-    act_logged = 0
-
-    for act in activity_items:
-        _log_entry(
-            sheets, ws_log, pkt_stamp(),
-            act.get("tid", ""), act.get("nick", ""),
-            act.get("type", "ACTIVITY"), "ACTIVITY",
-            act.get("text", ""), act.get("url", ""), "Logged",
-        )
-        act_logged += 1
-        time.sleep(0.15)
-
     duration = _time.time() - run_start
     logger.section(
-        f"INBOX DONE — "
-        f"New:{new_synced}  Sent:{sent}  Failed:{failed}  Activity:{act_logged}"
+        f"INBOX MODE DONE — New:{new_synced}  Sent:{sent}  Failed:{failed}"
     )
 
     stats = {
         "new_synced":      new_synced,
         "sent":            sent,
         "replies_failed":  failed,
-        "activity_logged": act_logged,
     }
     sheets.log_run(
         "inbox",
         {"added": new_synced, "sent": sent, "failed": failed},
         duration_s=duration,
-        notes=f"New convos:{new_synced}  Replies sent:{sent}  Activity:{act_logged}",
+        notes=f"New convos:{new_synced}  Replies sent:{sent}",
     )
     return stats
 
 
 def run_activity(driver, sheets: SheetsManager, logger: Logger) -> Dict:
-    """Alias: activity mode runs the full inbox+activity cycle."""
-    return run_inbox(driver, sheets, logger)
+    """Activity mode: Only fetch and log activity feed, no inbox processing."""
+    logger.section("ACTIVITY MODE")
+    
+    start_time = time.time()
+    stats = {"activities": 0, "failed": 0}
+    
+    try:
+        # Login is handled by the caller
+        logger.info("Fetching activity feed...")
+        
+        # Fetch activity only
+        activities = _fetch_activity(driver, logger)
+        
+        # Log activities to InboxLog
+        for activity in activities:
+            _log_entry(sheets, sheets.get_worksheet(Config.SHEET_INBOX_LOG), 
+                      pkt_stamp(), activity["tid"], activity["nick"],
+                      "ACTIVITY", "ACTIVITY", activity["text"], 
+                      activity.get("url", ""), "Logged")
+            stats["activities"] += 1
+        
+        duration = time.time() - start_time
+        logger.ok(f"Activity mode completed: {stats['activities']} activities logged")
+        
+        sheets.log_run(
+            "activity",
+            {"activities": stats["activities"]},
+            duration_s=duration,
+            notes=f"Activity feed: {stats['activities']} items logged"
+        )
+        
+    except Exception as e:
+        logger.error(f"Activity mode failed: {e}")
+        stats["failed"] = 1
+    
+    return stats
 
 
 # ════════════════════════════════════════════════════════════════════════════════

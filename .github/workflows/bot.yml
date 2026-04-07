@@ -1,4 +1,4 @@
-name: DD-Msg-Bot
+name: DD-Msg-Bot - Focused Version
 
 on:
   # ── Manual trigger — run any mode on demand ──────────────────────────────
@@ -7,25 +7,20 @@ on:
       mode:
         description: 'Mode to run'
         required: true
-        default: 'post'
+        default: 'msg'
         type: choice
         options:
-          - rekhta
           - msg
-          - post
           - inbox
           - activity
-          - logs
-          - setup
-          - format
       max_items:
-        description: 'Max items to process (0 = 1 for post)'
+        description: 'Max items to process (0 = unlimited)'
         required: false
-        default: '1'
+        default: '10'
 
-  # ── Scheduled: 1 post every hour ─────────────────────────────────────────
+  # ── Scheduled: Process messages and activity every 2 hours ─────────────────
   schedule:
-    - cron: '0 * * * *'   # top of every hour — posts 1 image
+    - cron: '0 */2 * * *'   # every 2 hours — process messages and activity
 
 permissions:
   contents: read
@@ -61,9 +56,9 @@ jobs:
             echo "mode=${{ github.event.inputs.mode }}"       >> $GITHUB_OUTPUT
             echo "max=${{ github.event.inputs.max_items }}"   >> $GITHUB_OUTPUT
           else
-            # Scheduled run = always post, always 1
-            echo "mode=post" >> $GITHUB_OUTPUT
-            echo "max=1"     >> $GITHUB_OUTPUT
+            # Scheduled run = process messages
+            echo "mode=msg" >> $GITHUB_OUTPUT
+            echo "max=20"    >> $GITHUB_OUTPUT
           fi
 
       - name: Run bot — ${{ steps.params.outputs.mode }} (max ${{ steps.params.outputs.max }})
