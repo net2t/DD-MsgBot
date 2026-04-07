@@ -28,7 +28,6 @@ from core.login import LoginManager
 from core.sheets import SheetsManager
 
 import modes.message   as message_mode
-import modes.messages  as messages_mode
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -44,8 +43,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "mode", nargs="?",
-        choices=["msg", "messages"],
-        help="Which mode to run (omit for interactive menu). 'messages' is unified inbox + activity.",
+        choices=["msg"],
+        help="Message sending mode (omit for interactive menu).",
     )
     p.add_argument(
         "--max", dest="max_items", type=int, default=0, metavar="N",
@@ -76,11 +75,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 _MENU = """
 ╔══════════════════════════════════════════════════════════╗
-║           DD-Msg-Bot V{ver}  —  DamaDam.pk Bot           ║
+║           DD-Msg-Bot V4.1.0  —  Message Sender         ║
 ╠══════════════════════════════════════════════════════════╣
 ║                                                          ║
-║   1.  ✡  Message    Send messages to targets             ║
-║   2.  ✡  Messages   Unified inbox & activity (NEW!)      ║
+║   1.  📤 Send Messages                                   ║
 ║                                                          ║
 ║   0.  Exit                                               ║
 ╚══════════════════════════════════════════════════════════╝
@@ -99,12 +97,11 @@ def _interactive_menu() -> tuple:
 
         mode_map = {
             "1": "msg",
-            "2": "messages",
             "0": None,
         }
 
         if raw not in mode_map:
-            print("  ⚠  Invalid choice — enter 1–3 or 0 to exit.\n")
+            print("  ⚠  Invalid choice — enter 1 or 0 to exit.\n")
             continue
 
         mode = mode_map[raw]
@@ -112,11 +109,11 @@ def _interactive_menu() -> tuple:
             print("  Goodbye!\n")
             sys.exit(0)
 
-        # For modes that support --max, ask for a limit
+        # For message mode, ask for a limit
         max_items = 0
-        if mode in ("msg", "messages"):
+        if mode == "msg":
             limit_raw = input(
-                f"Max items to process? (Enter for unlimited, 0=unlimited): "
+                f"Max messages to send? (Enter for unlimited, 0=unlimited): "
             ).strip()
             if limit_raw.isdigit():
                 max_items = int(limit_raw)
@@ -158,8 +155,6 @@ def _run_with_browser(mode: str, args) -> None:
 
         if mode == "msg":
             message_mode.run(driver, sheets, logger, max_targets=max_n)
-        elif mode == "messages":
-            messages_mode.run_messages(driver, sheets, logger)
 
     finally:
         bm.close()
@@ -194,7 +189,7 @@ def main():
             Config.DEBUG = True
 
     # ── Dispatch ─────────────────────────────────────────────────────────────
-    if mode in ("msg", "messages"):
+    if mode == "msg":
         _run_with_browser(mode, args)
     else:
         parser.error(f"Unknown mode: {mode}")
