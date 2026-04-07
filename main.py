@@ -1,17 +1,11 @@
 """
-main.py — DD-Msg-Bot V2
+main.py — DD-Msg-Bot V4.1 - Unified Message Version
 ━━━━━━━━━━━━━━━━━━━━━━━
-Entry point for all bot modes.
+Entry point for 3 core bot modes.
 
 CLI usage (GitHub Actions / direct):
     python main.py msg            → Message Mode
-    python main.py post           → Post Mode
-    python main.py rekhta         → Rekhta Mode
-    python main.py inbox          → Inbox Mode
-    python main.py activity       → Activity Mode
-    python main.py logs           → View recent MasterLog entries
-    python main.py setup          → Create / repair sheets
-    python main.py format         → Apply formatting to all sheets
+    python main.py messages       → Unified Message Mode (inbox + activity)
 
 Options:
     --max N    Process only N items (0 = unlimited)
@@ -33,12 +27,7 @@ from core.browser import BrowserManager
 from core.login import LoginManager
 from core.sheets import SheetsManager
 
-import modes.message  as message_mode
-import modes.post     as post_mode
-import modes.rekhta   as rekhta_mode
-import modes.inbox    as inbox_mode
-import modes.logs     as logs_mode
-import modes.setup    as setup_mode
+import modes.message   as message_mode
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -54,9 +43,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "mode", nargs="?",
-        choices=["msg", "post", "rekhta", "inbox", "activity",
-                 "logs", "setup", "format"],
-        help="Which mode to run (omit for interactive menu). 'activity' is an alias for 'inbox'.",
+        choices=["msg"],
+        help="Message sending mode (omit for interactive menu).",
     )
     p.add_argument(
         "--max", dest="max_items", type=int, default=0, metavar="N",
@@ -87,18 +75,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 _MENU = """
 ╔══════════════════════════════════════════════════════════╗
-║           DD-Msg-Bot V{ver}  —  DamaDam.pk Bot           ║
+║           DD-Msg-Bot V4.1.0  —  Message Sender         ║
 ╠══════════════════════════════════════════════════════════╣
 ║                                                          ║
-║   1.  ✡  Rekhta     Scrape Rekhta & fill PostQueue      ║
-║   2.  ✡  Message    Send messages to MsgList targets     ║
-║   3.  ✡  Post       Create posts from PostQueue          ║
-║   4.  ✡  Inbox      Sync inbox & send pending replies    ║
-║   5.  ✡  Activity   Log DamaDam activity feed            ║
-║   6.  ✡  View Logs  Show recent MasterLog entries        ║
-║   7.  ✡  Settings                                        ║
-║            ├─ 7a  Setup    Create / repair all sheets    ║
-║            └─ 7b  Format   Apply Lexend font + styling   ║
+║   1.  📤 Send Messages                                   ║
 ║                                                          ║
 ║   0.  Exit                                               ║
 ╚══════════════════════════════════════════════════════════╝
@@ -116,18 +96,12 @@ def _interactive_menu() -> tuple:
         raw = input("  Enter choice: ").strip()
 
         mode_map = {
-            "1": "rekhta",
-            "2": "msg",
-            "3": "post",
-            "4": "inbox",    # Inbox + Activity combined
-            "5": "logs",
-            "6a": "setup",
-            "6b": "format",
+            "1": "msg",
             "0": None,
         }
 
         if raw not in mode_map:
-            print("  ⚠  Invalid choice — enter 1–5, 6a, 6b or 0 to exit.\n")
+            print("  ⚠  Invalid choice — enter 1 or 0 to exit.\n")
             continue
 
         mode = mode_map[raw]
@@ -135,11 +109,11 @@ def _interactive_menu() -> tuple:
             print("  Goodbye!\n")
             sys.exit(0)
 
-        # For modes that support --max, ask for a limit
+        # For message mode, ask for a limit
         max_items = 0
-        if mode in ("rekhta", "msg", "post"):
+        if mode == "msg":
             limit_raw = input(
-                f"  Max items to process? (Enter for unlimited, 0=unlimited): "
+                f"Max messages to send? (Enter for unlimited, 0=unlimited): "
             ).strip()
             if limit_raw.isdigit():
                 max_items = int(limit_raw)
@@ -154,14 +128,11 @@ def _interactive_menu() -> tuple:
 def _run_with_browser(mode: str, args) -> None:
     """
     Shared runner for modes that need a browser.
-    Starts Chrome, logs in (except Rekhta), connects to Sheets, runs the mode.
+    Starts Chrome, logs in, connects to Sheets, runs the mode.
     """
     logger = Logger(mode)
     logger.section(f"DD-Msg-Bot V{Config.VERSION} — {mode.upper()} MODE")
     Config.validate()
-
-    if mode == "post":
-        Config.DISABLE_IMAGES = False
 
     bm     = BrowserManager(logger)
     driver = bm.start()
@@ -170,12 +141,10 @@ def _run_with_browser(mode: str, args) -> None:
         sys.exit(1)
 
     try:
-        # Rekhta is a public site — no DamaDam login needed
-        if mode != "rekhta":
-            lm = LoginManager(driver, logger)
-            if not lm.login():
-                logger.error("Login failed — aborting")
-                sys.exit(1)
+        lm = LoginManager(driver, logger)
+        if not lm.login():
+            logger.error("Login failed — aborting")
+            sys.exit(1)
 
         sheets = SheetsManager(logger)
         if not sheets.connect():
@@ -186,40 +155,11 @@ def _run_with_browser(mode: str, args) -> None:
 
         if mode == "msg":
             message_mode.run(driver, sheets, logger, max_targets=max_n)
-        elif mode == "post":
-            post_mode.run(driver, sheets, logger, max_posts=max_n,
-                          stop_on_fail=getattr(args, "stop_on_fail", False),
-                          force_wait=getattr(args, "force_wait", None))
-        elif mode == "rekhta":
-            rekhta_mode.run(driver, sheets, logger, max_items=max_n)
-        elif mode == "inbox":
-            inbox_mode.run_inbox(driver, sheets, logger)
-        elif mode == "activity":  # backwards-compat alias
-            inbox_mode.run_inbox(driver, sheets, logger)
 
     finally:
         bm.close()
 
 
-def _run_sheets_only(mode: str, args) -> None:
-    """
-    Runner for modes that only need Google Sheets — no browser started.
-    Covers: logs, setup, format.
-    """
-    logger = Logger(mode)
-    Config.validate()
-
-    sheets = SheetsManager(logger)
-    if not sheets.connect():
-        logger.error("Google Sheets connection failed")
-        sys.exit(1)
-
-    if mode == "logs":
-        logs_mode.run(sheets, logger, last_n=30)
-    elif mode == "setup":
-        setup_mode.run(sheets, logger)
-    elif mode == "format":
-        setup_mode.run_format(sheets, logger)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -249,10 +189,10 @@ def main():
             Config.DEBUG = True
 
     # ── Dispatch ─────────────────────────────────────────────────────────────
-    if mode in ("msg", "post", "rekhta", "inbox", "activity"):
+    if mode == "msg":
         _run_with_browser(mode, args)
     else:
-        _run_sheets_only(mode, args)
+        parser.error(f"Unknown mode: {mode}")
 
 
 if __name__ == "__main__":

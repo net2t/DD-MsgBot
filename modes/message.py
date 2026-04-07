@@ -32,7 +32,7 @@ Root cause of empty posts (previous bug):
 import re
 import time
 from urllib.parse import quote
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -78,6 +78,8 @@ def run(driver, sheets: SheetsManager, logger: Logger,
     headers    = all_rows[0]
     header_map = SheetsManager.build_header_map(headers)
 
+    header_len = len(headers)
+
     col_status   = sheets.get_col(headers, "STATUS")
     col_notes    = sheets.get_col(headers, "NOTES")
     col_result   = sheets.get_col(headers, "RESULT", "RESULT_URL")
@@ -90,18 +92,37 @@ def run(driver, sheets: SheetsManager, logger: Logger,
     def cell(row, *names):
         return SheetsManager.get_cell(row, header_map, *names)
 
+    def cell_by_col(row, col_1_based: Optional[int]) -> str:
+        if not col_1_based:
+            return ""
+        idx = col_1_based - 1
+        if idx < 0:
+            return ""
+        if idx >= len(row):
+            return ""
+        return str(row[idx]).strip()
+
     # ── Collect pending rows ──────────────────────────────────────────────────
     pending: List[Dict] = []
+    pending_status_rows = 0
+    missing_nick_rows = 0
+    missing_message_rows = 0
     for i, row in enumerate(all_rows[1:], start=2):
-        status = cell(row, "STATUS").lower()
+        if header_len and len(row) < header_len:
+            row = row + [""] * (header_len - len(row))
+
+        status = cell_by_col(row, col_status).lower()
         if not status.startswith("pending"):
             continue
+        pending_status_rows += 1
         nick = cell(row, "NICK", "NICK/URL")
         if not nick:
+            missing_nick_rows += 1
             continue
         message = cell(row, "MESSAGE")
         if not message:
             logger.skip(f"Row {i} — no message, skipping")
+            missing_message_rows += 1
             continue
         pending.append({
             "row": i, "nick": nick,
@@ -114,7 +135,25 @@ def run(driver, sheets: SheetsManager, logger: Logger,
         })
 
     if not pending:
-        logger.info("No Pending rows in MsgQue")
+        try:
+            sample_statuses = []
+            for r in all_rows[1:21]:
+                if header_len and len(r) < header_len:
+                    r = r + [""] * (header_len - len(r))
+                s = cell_by_col(r, col_status)
+                if s:
+                    sample_statuses.append(s)
+            if sample_statuses:
+                logger.debug(f"MsgQue STATUS samples: {sample_statuses[:10]}")
+        except Exception:
+            pass
+        if pending_status_rows > 0:
+            logger.info(
+                "No actionable Pending rows in MsgQue "
+                f"(Pending={pending_status_rows}, MissingNick={missing_nick_rows}, MissingMessage={missing_message_rows})"
+            )
+        else:
+            logger.info("No Pending rows in MsgQue")
         return {"done": 0, "skipped": 0, "failed": 0, "total": 0}
 
     if max_targets and max_targets > 0:
@@ -130,15 +169,15 @@ def run(driver, sheets: SheetsManager, logger: Logger,
         logger.info(f"[{idx}/{len(pending)}] Processing: {nick}")
 
         # -- Find an open post ------------------------------------------------
-        post_url = _find_open_post(driver, nick, logger)
+        post_url, skip_reason = _find_open_post(driver, nick, logger)
 
         if not post_url:
             logger.skip(f"{nick} — no open posts found")
             sheets.update_row_cells(ws, row_num, {
                 col_status: "Skipped",
-                col_notes:  "No open posts",
+                col_notes:  (skip_reason or "No open posts"),
             })
-            sheets.log_action("MSG", "skip", nick, "", "Skipped", "No open posts")
+            sheets.log_action("MSG", "skip", nick, "", "Skipped", (skip_reason or "No open posts"))
             stats["skipped"] += 1
             continue
 
@@ -221,29 +260,52 @@ def run(driver, sheets: SheetsManager, logger: Logger,
 #  FIND OPEN POST
 # ════════════════════════════════════════════════════════════════════════════════
 
-def _find_open_post(driver, nick: str, logger: Logger) -> Optional[str]:
+def _find_open_post(driver, nick_or_url: str, logger: Logger) -> Tuple[Optional[str], Optional[str]]:
     """
-    Find the first open/commentable post on a user's public profile.
-
-    Strategy 1: Look for button[itemprop='discussionUrl'] inside a /comments/ link.
-                 This button ONLY exists on posts with open comments.
-    Strategy 2: Collect all /comments/ hrefs from the page without navigating away,
-                 then verify each one in a second pass.
-
-    Returns the clean post URL or None.
+    Find an open/commentable post based on input type:
+    
+    1. If nickname/username: Visit profile → find posts → check which allow messaging
+    2. If post URL: Directly open the post URL → check if message box is available
+    
+    Returns:
+        (clean_post_url, None) on success
+        (None, reason) on failure
     """
-    raw_nick = str(nick).strip()
+    raw_input = str(nick_or_url).strip()
+    
+    # Check if input is a post URL (not profile URL)
+    if ("http" in raw_input.lower() and "damadam.pk" in raw_input.lower() and 
+        "/comments/" in raw_input.lower()):
+        # This is a post URL - directly check if it's open for messaging
+        logger.debug(f"Direct post URL detected: {raw_input}")
+        clean_url = clean_post_url(raw_input)
+        if is_valid_post_url(clean_url):
+            is_open, reason = _verify_post_open(driver, clean_url, logger)
+            if is_open:
+                logger.debug(f"Direct post URL is open: {clean_url}")
+                return clean_url, None
+            else:
+                logger.debug(f"Direct post URL is not open for messaging: {clean_url}")
+                return None, reason
+        else:
+            logger.debug(f"Invalid post URL format: {raw_input}")
+            return None, "Invalid post URL"
+    
+    # Handle nickname or profile URL
+    nick = raw_input
     # If the sheet contains a full profile URL, extract the nick part.
     # Supports common patterns like:
     #   https://damadam.pk/profile/public/<nick>/
     #   https://damadam.pk/profile/<nick>/
-    if "http" in raw_nick.lower() and "damadam.pk" in raw_nick.lower():
-        m = re.search(r"/profile/(?:public/)?([^/]+)/?", raw_nick, flags=re.I)
+    if "http" in raw_input.lower() and "damadam.pk" in raw_input.lower():
+        m = re.search(r"/profile/(?:public/)?([^/]+)/?", raw_input, flags=re.I)
         if m:
-            raw_nick = m.group(1).strip()
+            nick = m.group(1).strip()
 
-    safe_nick = quote(raw_nick, safe="+")
+    safe_nick = quote(nick, safe="+")
     max_pages  = max(1, Config.MAX_POST_PAGES)
+
+    last_reason: Optional[str] = None
 
     for page_num in range(1, max_pages + 1):
         url = f"{Config.BASE_URL}/profile/public/{safe_nick}/?page={page_num}"
@@ -265,7 +327,7 @@ def _find_open_post(driver, nick: str, logger: Logger) -> Optional[str]:
                         clean = clean_post_url(href)
                         if is_valid_post_url(clean):
                             logger.debug(f"Found open post: {clean}")
-                            return clean
+                            return clean, None
                 except Exception:
                     continue
 
@@ -285,8 +347,11 @@ def _find_open_post(driver, nick: str, logger: Logger) -> Optional[str]:
                         candidate_urls.append(clean)
 
             for candidate in candidate_urls[:3]:  # Check up to 3 candidates
-                if _verify_post_open(driver, candidate, logger):
-                    return candidate
+                is_open, reason = _verify_post_open(driver, candidate, logger)
+                if is_open:
+                    return candidate, None
+                if reason:
+                    last_reason = last_reason or reason
 
             # Check for next page
             try:
@@ -300,30 +365,30 @@ def _find_open_post(driver, nick: str, logger: Logger) -> Optional[str]:
             logger.debug(f"Profile page {page_num} error: {e}")
             break
 
-    logger.debug(f"No open posts found for {nick}")
-    return None
+    logger.debug(f"No open posts found for {nick_or_url}")
+    return None, last_reason
 
 
-def _verify_post_open(driver, post_url: str, logger: Logger) -> bool:
+def _verify_post_open(driver, post_url: str, logger: Logger) -> tuple[bool, Optional[str]]:
     """Navigate to a post and check if the reply form is present and open."""
     try:
         driver.get(post_url)
         time.sleep(2)
         page = driver.page_source.lower()
         if "comments are closed" in page or "comments closed" in page:
-            return False
+            return False, "Comments Closed"
         if "follow to reply" in page:
-            return False
+            return False, "Follow required"
         forms = driver.find_elements(By.CSS_SELECTOR, _SEL_REPLY_FORM)
         for f in forms:
             try:
                 f.find_element(By.CSS_SELECTOR, _SEL_REPLY_TEXTAREA)
-                return True
+                return True, None
             except Exception:
                 continue
-        return False
+        return False, "No Form"
     except Exception:
-        return False
+        return False, "Error"
 
 
 # ════════════════════════════════════════════════════════════════════════════════

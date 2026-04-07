@@ -1,22 +1,24 @@
-# DD-Msg-Bot V2 — DamaDam.pk Automation Bot
+# DD-Msg-Bot V4.1 — Unified Message Version
 
-Modular, multi-mode automation bot for DamaDam.pk.  
-Manages messaging, image posting, Rekhta poetry scraping, and inbox replies — all driven by Google Sheets.
+A streamlined Python bot for DamaDam.pk featuring unified message management: combines inbox and activity into one comprehensive system with date-organized logging and person record ID tracking.
 
 ---
 
-## Modes
+## Features
 
-| Mode | What it does |
-|------|--------------|
-| `rekhta` | Scrape poetry image cards from rekhta.org → populate PostQueue sheet |
-| `msg` | Send messages to targets listed in MsgList sheet |
-| `post` | Create image/text posts from PostQueue sheet |
-| `inbox` | Sync DamaDam inbox conversations → send pending replies from InboxQueue sheet |
-| `activity` | Fetch DamaDam activity feed → log to MasterLog sheet |
-| `logs` | Print the last 30 MasterLog entries to console |
-| `setup` | Create / repair all required sheet tabs and headers |
-| `format` | Apply Lexend font, dark header row, and CENTER/MIDDLE/CLIP style to all sheets |
+- **Message Mode**: Send personalized messages to users via nicknames or direct post URLs
+- **Messages Mode**: Unified inbox + activity management with date-organized logging
+
+---
+
+## Key Improvements in V4.1
+
+- **Unified Message System**: Merged inbox and activity into single comprehensive mode
+- **Date-Organized Logging**: All messages organized by date for better tracking
+- **Person Record ID**: Unique identifiers for each person (TID_NICK format)
+- **Streamlined Sheets**: Reduced sheet count while maintaining full functionality
+- **Enhanced Performance**: Optimized for faster execution and cleaner data organization
+- **Simplified Interface**: Only 2 core modes for focused functionality
 
 ---
 
@@ -74,7 +76,7 @@ python main.py <mode> [--max N] [--debug] [--headless]
 
 | Argument | Description |
 |----------|--------------|
-| `mode` | One of: `rekhta msg post inbox activity logs setup format` |
+| `mode` | One of: `msg messages setup` |
 | `--max N` | Process only N items (default: 0 = unlimited) |
 | `--debug` | Verbose debug output |
 | `--headless` | Force headless browser (auto-enabled in CI) |
@@ -83,11 +85,8 @@ python main.py <mode> [--max N] [--debug] [--headless]
 
 ```bash
 python main.py msg --max 5          # Send to 5 targets only
-python main.py post --max 1         # Post 1 item (safe test)
-python main.py rekhta --max 30      # Scrape up to 30 new cards
-python main.py inbox                # Sync inbox + send replies
-python main.py format               # Apply sheet formatting
-python main.py logs                 # View recent activity
+python main.py messages             # Unified inbox + activity management
+python main.py setup                # Create/initialize sheets
 ```
 
 ---
@@ -122,7 +121,7 @@ A single workflow file (`.github/workflows/bot.yml`) handles all 5 scheduled run
 
 ## Sheet Structure
 
-### MsgList
+### MsgQue
 
 Targets for Message Mode.
 
@@ -139,50 +138,50 @@ Targets for Message Mode.
 | STATUS | `Pending` → `Done` / `Skipped` / `Failed` |
 | NOTES | Set by bot after each run |
 | RESULT | URL of the post where message was sent |
+| SENT_MSG | Actual resolved message that was sent |
 
-### PostQueue
+### MessageQueue
 
-Queue for Post Mode. Populated by Rekhta Mode.
-
-| Column | Description |
-|--------|--------------|
-| STATUS | `Pending` → `Done` / `Failed` / `Repeating` |
-| TYPE | `image` or `text` |
-| TITLE | Roman Urdu first line (reference) |
-| URDU | Urdu caption — use `=GOOGLETRANSLATE(...)` formula |
-| IMG_LINK | Full image URL from Rekhta |
-| POET | Poet name |
-| POST_URL | Filled by bot after successful post |
-| ADDED | Timestamp when row was scraped |
-| NOTES | Error details set by bot |
-
-### InboxQueue
-
-Inbox reply queue for Inbox Mode.
+Unified message queue (replaces InboxQue). Organized by person record ID.
 
 | Column | Description |
 |--------|--------------|
+| RECORD_ID | Unique ID (TID_NICK or NOID_NICK) |
+| DATE | Date of conversation (YYYY-MM-DD) |
 | NICK | DamaDam username |
 | NAME | Display name |
-| LAST_MSG | Last message received |
-| MY_REPLY | Your reply text — bot sends this when STATUS=Pending |
-| STATUS | `Pending` → `Done` / `Failed` |
-| TIMESTAMP | When conversation was first synced |
+| TYPE | 1ON1 / POST / MEHFIL / UNKNOWN |
+| TID | DamaDam user ID |
+| LAST_MESSAGE | Last message received |
+| MY_REPLY | Your reply text — bot sends when STATUS=Pending |
+| STATUS | Pending → Done / Failed / NoReply |
+| UPDATED | Timestamp of last sync |
 | NOTES | Set by bot |
 
-### MasterLog
+### MessageLog
 
-All bot activity is logged here automatically.
+Unified message log (replaces InboxLog). Organized by date with complete history.
 
 | Column | Description |
 |--------|--------------|
+| DATE | Date of message (YYYY-MM-DD) - for sorting |
 | TIMESTAMP | PKT timestamp |
-| MODE | Which mode ran |
-| ACTION | What action was performed |
-| NICK | Target username |
-| URL | Relevant URL |
-| STATUS | Result status |
-| DETAILS | Extra detail / error message |
+| RECORD_ID | Person record ID (TID_NICK or NOID_NICK) |
+| NICK | Username |
+| TYPE | 1ON1 / POST / MEHFIL / ACTIVITY |
+| DIRECTION | IN / OUT / ACTIVITY |
+| MESSAGE | Message text or activity description |
+| CONV_URL | Link to conversation or post |
+| STATUS | Received / Sent / Failed / Logged |
+
+### Other Sheets
+
+- **MsgLog**: History of all sent messages
+- **PostQue**: Post content queue (if using post mode)
+- **PostLog**: History of created posts
+- **Logs**: Master activity log
+- **ScrapeState**: Pagination cursors
+- **Dashboard**: Summary/analysis (formulas only)
 
 ---
 

@@ -1,13 +1,13 @@
 """
-modes/setup.py — DD-Msg-Bot V2
+modes/setup.py — DD-Msg-Bot V4.1.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Setup Mode  : Delete old sheets and create the full new structure.
 Format Mode : Apply Lexend font + dark header styling to all sheets.
 
-Sheet structure created:
-  Queue sheets  → MsgQue, PostQue, InboxQue
-  Log sheets    → MsgLog, PostLog, InboxLog
-  Master log    → Logs
+Sheet structure created (V4.1.0):
+  Queue sheets  → MsgQue, PostQue, MessageQueue
+  Log sheets    → MsgLog, PostLog, MessageLog
+  System sheets → Logs, ScrapeState
   Dashboard     → Dashboard (empty, formula-based — you fill it)
 
 No browser needed for either mode.
@@ -19,12 +19,15 @@ from core.sheets import SheetsManager
 
 
 # ── Old sheet names to delete on fresh setup ──────────────────────────────────
-# These are the names from V1 / old structure that should be removed.
+# These are the names from previous versions that should be removed.
 _OLD_SHEET_NAMES = [
     "MsgList",
     "PostQueue",
     "InboxQueue",
+    "InboxQue",
+    "InboxLog",
     "MasterLog",
+    "RunLog",
     "Sheet1",       # Default Google Sheets tab
 ]
 
@@ -82,8 +85,8 @@ def run(sheets: SheetsManager, logger: Logger):
     except Exception as e:
         logger.warning(f"Dashboard creation failed: {e}")
 
-    logger.section("SETUP COMPLETE — All 8 sheets ready")
-    logger.info("Sheet order: MsgQue → PostQue → InboxQue → MsgLog → PostLog → InboxLog → Logs → Dashboard")
+    logger.section("SETUP COMPLETE — All 9 sheets ready")
+    logger.info("Sheet order: MsgQue -> PostQue -> MessageQueue -> MsgLog -> PostLog -> MessageLog -> Logs -> ScrapeState -> Dashboard")
 
 
 def run_format(sheets: SheetsManager, logger: Logger):

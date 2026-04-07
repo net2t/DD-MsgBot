@@ -1,37 +1,28 @@
-name: DD-Msg-Bot
+name: DD-Msg-Bot - Message Sender
 
 on:
-  # ── Manual trigger — run any mode on demand ──────────────────────────────
+  # ── Manual trigger — send messages on demand ──────────────────────────────
   workflow_dispatch:
     inputs:
-      mode:
-        description: 'Mode to run'
-        required: true
-        default: 'post'
-        type: choice
-        options:
-          - rekhta
-          - msg
-          - post
-          - inbox
-          - activity
-          - logs
-          - setup
-          - format
       max_items:
-        description: 'Max items to process (0 = 1 for post)'
+        description: 'Max messages to send (0 = unlimited)'
         required: false
-        default: '1'
+        default: '10'
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        default: false
+        type: boolean
 
-  # ── Scheduled: 1 post every hour ─────────────────────────────────────────
+  # ── Scheduled: Send messages every 2 hours ────────────────────────────────
   schedule:
-    - cron: '0 * * * *'   # top of every hour — posts 1 image
+    - cron: '0 */2 * * *'   # every 2 hours — send messages
 
 permissions:
   contents: read
 
 jobs:
-  run-bot:
+  send-messages:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -54,19 +45,19 @@ jobs:
       - name: Write Google credentials
         run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credentials.json
 
-      - name: Determine mode and max
+      - name: Determine parameters
         id: params
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "mode=${{ github.event.inputs.mode }}"       >> $GITHUB_OUTPUT
-            echo "max=${{ github.event.inputs.max_items }}"   >> $GITHUB_OUTPUT
+            echo "max=${{ github.event.inputs.max_items }}" >> $GITHUB_OUTPUT
+            echo "debug=${{ github.event.inputs.debug }}" >> $GITHUB_OUTPUT
           else
-            # Scheduled run = always post, always 1
-            echo "mode=post" >> $GITHUB_OUTPUT
-            echo "max=1"     >> $GITHUB_OUTPUT
+            # Scheduled run = send messages
+            echo "max=20" >> $GITHUB_OUTPUT
+            echo "debug=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Run bot — ${{ steps.params.outputs.mode }} (max ${{ steps.params.outputs.max }})
+      - name: Send Messages (max ${{ steps.params.outputs.max }})
         env:
           DD_LOGIN_EMAIL:          ${{ secrets.DD_LOGIN_EMAIL }}
           DD_LOGIN_PASS:           ${{ secrets.DD_LOGIN_PASS }}
@@ -76,9 +67,9 @@ jobs:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           GEMINI_API_KEY:          ${{ secrets.GEMINI_API_KEY }}
           DD_HEADLESS:             "1"
-          DD_DEBUG:                "0"
+          DD_DEBUG:                "${{ steps.params.outputs.debug }}"
         run: |
-          python main.py ${{ steps.params.outputs.mode }} --max ${{ steps.params.outputs.max }}
+          python main.py msg --max ${{ steps.params.outputs.max }} $([ "${{ steps.params.outputs.debug }}" = "true" ] && echo "--debug" || echo "")
 
       - name: Upload logs on failure
         if: failure()

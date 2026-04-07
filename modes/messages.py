@@ -1,17 +1,22 @@
 """
-modes/inbox.py — DD-Msg-Bot V2
+modes/messages.py — DD-Msg-Bot V4.1
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Inbox + Activity Mode (combined): ONE run does everything:
+Unified Message Mode: Combines inbox and activity into one comprehensive system
   Phase 1 — Fetch DamaDam inbox (/inbox/)
              Parse each conversation block → TID, NICK, TYPE, last message
-             Sync new conversations into InboxQue sheet
-             Log all new items to InboxLog with full detail
-  Phase 2 — Send pending replies
-             Rows in InboxQue where MY_REPLY has text + STATUS=Pending
+             Sync new conversations into MessageQueue sheet
+             Log all items to MessageLog with full detail
+  Phase 2 — Fetch activity feed (/inbox/activity/)
+             Log each activity item to MessageLog sheet
+  Phase 3 — Send pending replies
+             Rows in MessageQueue where MY_REPLY has text + STATUS=Pending
              Navigate to the conversation, extract hidden form fields,
              and submit via proper form POST (CSRF + tuid + obid + poid)
-  Phase 3 — Fetch activity feed (/inbox/activity/)
-             Log each activity item to InboxLog sheet
+
+New Sheet Structure:
+- MessageQueue: Replaces InboxQue, organized by person record ID
+- MessageLog: Replaces InboxLog, organized by date with complete history
+- Removed: RunLog, Logs (unnecessary)
 
 DamaDam inbox / reply HTML structure:
   Each inbox item → div.mbl.mtl containing:
@@ -31,14 +36,12 @@ DamaDam inbox / reply HTML structure:
       <input name="rorigin" value="35">
       <textarea name="direct_response">
     </form>
-
-  The REPLY button's name="dr_pl" encodes: "origin:obtp:obid:disc_id:tuid:prev_text"
-  e.g.: value="9:3:41740467:278026811:1391529:ok g"
 """
 
 import re
 import time
 from typing import List, Dict, Optional
+from datetime import datetime
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -66,25 +69,23 @@ _SEL_REPLY_FORM     = "form[action*='/direct-response/send']"
 _SEL_REPLY_TEXTAREA = "textarea[name='direct_response']"
 
 
-def run_inbox(driver, sheets: SheetsManager, logger: Logger) -> Dict:
+def run_messages(driver, sheets: SheetsManager, logger: Logger) -> Dict:
     """
-    Run full Inbox + Activity mode.
-
-    Phase 1: Fetch inbox  → sync InboxQue + log to InboxLog
-    Phase 2: Send replies → rows with MY_REPLY filled + STATUS=Pending
-    Phase 3: Fetch activity → log to InboxLog
-
+    Unified Message Mode: Sync conversations, activity, and send pending replies.
+    Phase 1: Sync new conversations from /inbox/
+    Phase 2: Fetch and log activity feed
+    Phase 3: Send pending replies
     Returns stats dict.
     """
     import time as _time
     run_start = _time.time()
 
-    logger.section("INBOX + ACTIVITY MODE")
+    logger.section("UNIFIED MESSAGE MODE")
 
-    ws_que = sheets.get_worksheet(Config.SHEET_INBOX_QUE, headers=Config.INBOX_QUE_COLS)
-    ws_log = sheets.get_worksheet(Config.SHEET_INBOX_LOG, headers=Config.INBOX_LOG_COLS)
-    if not ws_que or not ws_log:
-        logger.error("InboxQue or InboxLog sheet not found — run Setup first")
+    ws_queue = sheets.get_worksheet(Config.SHEET_MESSAGE_QUEUE, headers=Config.MESSAGE_QUEUE_COLS)
+    ws_log = sheets.get_worksheet(Config.SHEET_MESSAGE_LOG, headers=Config.MESSAGE_LOG_COLS)
+    if not ws_queue or not ws_log:
+        logger.error("MessageQueue or MessageLog sheet not found — run Setup first")
         return {}
 
     # ── Phase 1: Fetch inbox ──────────────────────────────────────────────────
@@ -92,72 +93,81 @@ def run_inbox(driver, sheets: SheetsManager, logger: Logger) -> Dict:
     inbox_items = _fetch_inbox(driver, logger)
     logger.info(f"Found {len(inbox_items)} conversations in inbox")
 
-    all_que_rows = sheets.read_all(ws_que)
-    que_headers  = all_que_rows[0] if all_que_rows else Config.INBOX_QUE_COLS
-    que_hmap     = SheetsManager.build_header_map(que_headers)
+    all_queue_rows = sheets.read_all(ws_queue)
+    queue_headers  = all_queue_rows[0] if all_queue_rows else Config.MESSAGE_QUEUE_COLS
+    queue_hmap     = SheetsManager.build_header_map(queue_headers)
 
     def qcell(row, *names):
-        return SheetsManager.get_cell(row, que_hmap, *names)
+        return SheetsManager.get_cell(row, queue_hmap, *names)
 
-    existing_tids = {
-        qcell(row, "TID").lower()
-        for row in all_que_rows[1:]
-        if qcell(row, "TID")
+    existing_record_ids = {
+        qcell(row, "RECORD_ID").lower()
+        for row in all_queue_rows[1:]
+        if qcell(row, "RECORD_ID")
     }
 
     new_synced = 0
     for item in inbox_items:
-        tid  = str(item.get("tid",  "")).strip()
+        record_id = _generate_record_id(item.get("tid", ""), item.get("nick", ""))
         nick = item.get("nick", "").strip()
+        msg_date = _extract_date_from_time(item.get("time_str", ""))
 
         if not nick:
             continue
 
-        # Log every inbox item to InboxLog (full history)
-        _log_entry(sheets, ws_log, pkt_stamp(), tid, nick,
-                   item.get("type", ""), "IN",
-                   item.get("last_msg", ""), item.get("conv_url", ""), "Received")
+        # Log every inbox item to MessageLog (full history)
+        _log_message_entry(sheets, ws_log, pkt_stamp(), record_id, nick,
+                          item.get("type", ""), "IN", 
+                          item.get("last_msg", ""), item.get("conv_url", ""), 
+                          "Received", msg_date)
 
-        # Sync new conversations into InboxQue
-        if tid and tid.lower() not in existing_tids:
+        # Sync new conversations into MessageQueue
+        if record_id and record_id.lower() not in existing_record_ids:
             row_vals = [
-                tid,
-                nick,
-                nick,               # NAME defaults to nick
-                item.get("type", ""),
-                item.get("last_msg", ""),
-                "",                 # MY_REPLY — you fill this in
-                "Pending",
-                pkt_stamp(),
-                "",
+                record_id,                    # RECORD_ID
+                msg_date,                     # DATE
+                nick,                         # NICK
+                nick,                         # NAME (defaults to nick)
+                item.get("type", ""),         # TYPE
+                item.get("tid", ""),          # TID
+                item.get("last_msg", ""),     # LAST_MESSAGE
+                "",                           # MY_REPLY
+                "Pending",                    # STATUS
+                pkt_stamp(),                  # UPDATED
+                "",                           # NOTES
             ]
-            if sheets.append_row(ws_que, row_vals):
-                logger.ok(f"New conversation: [{item.get('type','')}] {nick} (tid={tid})")
-                existing_tids.add(tid.lower())
+            if sheets.append_row(ws_queue, row_vals):
+                logger.ok(f"New conversation: [{item.get('type','')}] {nick} (record_id={record_id})")
+                existing_record_ids.add(record_id.lower())
                 new_synced += 1
-        elif not tid:
-            existing_nicks = {qcell(row, "NICK").lower() for row in all_que_rows[1:]}
-            if nick.lower() not in existing_nicks:
-                row_vals = ["", nick, nick, item.get("type", ""),
-                            item.get("last_msg", ""), "", "Pending", pkt_stamp(), ""]
-                if sheets.append_row(ws_que, row_vals):
-                    logger.ok(f"New conversation (no tid): {nick}")
-                    new_synced += 1
 
-    # ── Phase 2: Send pending replies ─────────────────────────────────────────
-    logger.info("Phase 2: Sending pending replies...")
+    # ── Phase 2: Fetch activity ─────────────────────────────────────────────────
+    logger.info("Phase 2: Fetching activity feed...")
+    activities = _fetch_activity(driver, logger)
+    logger.info(f"Found {len(activities)} activity items")
 
-    all_que_rows = sheets.read_all(ws_que)
-    que_hmap     = SheetsManager.build_header_map(all_que_rows[0]) if all_que_rows else {}
-    col_status   = sheets.get_col(all_que_rows[0] if all_que_rows else [], "STATUS")
-    col_notes    = sheets.get_col(all_que_rows[0] if all_que_rows else [], "NOTES")
-    col_updated  = sheets.get_col(all_que_rows[0] if all_que_rows else [], "UPDATED")
+    for activity in activities:
+        record_id = _generate_record_id(activity.get("tid", ""), activity.get("nick", ""))
+        msg_date = _extract_date_from_time(activity.get("time_str", ""))
+        
+        _log_message_entry(sheets, ws_log, pkt_stamp(), record_id, activity.get("nick", ""),
+                          "ACTIVITY", "ACTIVITY", activity.get("text", ""),
+                          activity.get("url", ""), "Logged", msg_date)
+
+    # ── Phase 3: Send pending replies ─────────────────────────────────────────
+    logger.info("Phase 3: Sending pending replies...")
+
+    all_queue_rows = sheets.read_all(ws_queue)
+    queue_hmap     = SheetsManager.build_header_map(all_queue_rows[0]) if all_queue_rows else {}
+    col_status     = sheets.get_col(all_queue_rows[0] if all_queue_rows else [], "STATUS")
+    col_notes      = sheets.get_col(all_queue_rows[0] if all_queue_rows else [], "NOTES")
+    col_updated    = sheets.get_col(all_queue_rows[0] if all_queue_rows else [], "UPDATED")
 
     def qcell2(row, *names):
-        return SheetsManager.get_cell(row, que_hmap, *names)
+        return SheetsManager.get_cell(row, queue_hmap, *names)
 
     pending_replies = []
-    for i, row in enumerate(all_que_rows[1:], start=2):
+    for i, row in enumerate(all_queue_rows[1:], start=2):
         reply  = qcell2(row, "MY_REPLY").strip()
         status = qcell2(row, "STATUS").lower()
         nick   = qcell2(row, "NICK").strip()
@@ -192,67 +202,61 @@ def run_inbox(driver, sheets: SheetsManager, logger: Logger) -> Dict:
 
         if ok:
             logger.ok(f"Reply sent → {nick}")
-            sheets.update_row_cells(ws_que, row_n, {
+            sheets.update_row_cells(ws_queue, row_n, {
                 col_status:  "Done",
                 col_notes:   f"Replied @ {pkt_stamp()}",
                 col_updated: pkt_stamp(),
             })
-            _log_entry(sheets, ws_log, pkt_stamp(), tid, nick,
-                       item["type"], "OUT", reply, sent_url or conv_url, "Sent")
-            sheets.log_action("INBOX", "reply_sent", nick, sent_url or conv_url, "Done", reply[:80])
+            record_id = _generate_record_id(tid, nick)
+            _log_message_entry(sheets, ws_log, pkt_stamp(), record_id, nick,
+                              item["type"], "OUT", reply, sent_url or conv_url, "Sent", 
+                              _extract_date_from_time(""))
             sent += 1
         else:
             logger.warning(f"Reply failed → {nick}")
-            sheets.update_row_cells(ws_que, row_n, {
+            sheets.update_row_cells(ws_queue, row_n, {
                 col_status:  "Failed",
                 col_notes:   f"Send failed @ {pkt_stamp()}",
                 col_updated: pkt_stamp(),
             })
-            _log_entry(sheets, ws_log, pkt_stamp(), tid, nick,
-                       item["type"], "OUT", reply, conv_url, "Failed")
+            record_id = _generate_record_id(tid, nick)
+            _log_message_entry(sheets, ws_log, pkt_stamp(), record_id, nick,
+                              item["type"], "OUT", reply, conv_url, "Failed",
+                              _extract_date_from_time(""))
             failed += 1
 
         time.sleep(2)
 
-    # ── Phase 3: Activity feed ────────────────────────────────────────────────
-    logger.info("Phase 3: Fetching activity feed...")
-    activity_items = _fetch_activity(driver, logger, max_items=60, max_pages=5)
-    act_logged = 0
-
-    for act in activity_items:
-        _log_entry(
-            sheets, ws_log, pkt_stamp(),
-            act.get("tid", ""), act.get("nick", ""),
-            act.get("type", "ACTIVITY"), "ACTIVITY",
-            act.get("text", ""), act.get("url", ""), "Logged",
-        )
-        act_logged += 1
-        time.sleep(0.15)
-
     duration = _time.time() - run_start
     logger.section(
-        f"INBOX DONE — "
-        f"New:{new_synced}  Sent:{sent}  Failed:{failed}  Activity:{act_logged}"
+        f"MESSAGE MODE DONE — New:{new_synced}  Sent:{sent}  Failed:{failed}  Activities:{len(activities)}"
     )
 
     stats = {
         "new_synced":      new_synced,
         "sent":            sent,
         "replies_failed":  failed,
-        "activity_logged": act_logged,
+        "activities":      len(activities),
     }
-    sheets.log_run(
-        "inbox",
-        {"added": new_synced, "sent": sent, "failed": failed},
-        duration_s=duration,
-        notes=f"New convos:{new_synced}  Replies sent:{sent}  Activity:{act_logged}",
-    )
     return stats
 
 
-def run_activity(driver, sheets: SheetsManager, logger: Logger) -> Dict:
-    """Alias: activity mode runs the full inbox+activity cycle."""
-    return run_inbox(driver, sheets, logger)
+def _generate_record_id(tid: str, nick: str) -> str:
+    """Generate a unique record ID combining TID and nickname."""
+    if tid:
+        return f"{tid}_{nick}"
+    return f"NOID_{nick}"
+
+
+def _extract_date_from_time(time_str: str) -> str:
+    """Extract date from time string or return current date."""
+    try:
+        if "ago" in time_str.lower():
+            return datetime.now().strftime("%Y-%m-%d")
+        # Try to parse other formats if needed
+        return datetime.now().strftime("%Y-%m-%d")
+    except:
+        return datetime.now().strftime("%Y-%m-%d")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -355,6 +359,15 @@ def _parse_inbox_block(block) -> Optional[Dict]:
     except Exception:
         pass
 
+    # Time string
+    time_str = ""
+    try:
+        time_els = block.find_elements(By.CSS_SELECTOR, _SEL_TIME_SPAN)
+        if time_els:
+            time_str = (time_els[0].text or "").strip()
+    except Exception:
+        pass
+
     # Conversation URL
     conv_url = _URL_INBOX
     try:
@@ -375,6 +388,7 @@ def _parse_inbox_block(block) -> Optional[Dict]:
         "nick":      nick,
         "type":      conv_type,
         "last_msg":  last_msg,
+        "time_str":  time_str,
         "timestamp": pkt_stamp(),
         "conv_url":  conv_url,
     }
@@ -388,15 +402,6 @@ def _send_reply(driver, conv_url: str, tid: str,
                 reply_text: str, nick: str, logger: Logger):
     """
     Navigate to the conversation and submit a reply.
-
-    Strategy:
-      1. Go to conv_url
-      2. Find the reply form (form[action*='/direct-response/send/'])
-      3. Extract all hidden form fields (csrfmiddlewaretoken, tuid, obid, poid,
-         obtp, origin, rorigin)
-      4. Type reply using send_keys (React-safe) and submit
-      5. Fallback to /inbox/ if conv_url has no reply form
-
     Returns (success: bool, posted_url: str)
     """
     safe_reply = strip_non_bmp(reply_text)[:350]
@@ -537,6 +542,15 @@ def _fetch_activity(driver, logger: Logger,
                     except Exception:
                         pass
 
+                    # Time string
+                    time_str = ""
+                    try:
+                        time_els = block.find_elements(By.CSS_SELECTOR, _SEL_TIME_SPAN)
+                        if time_els:
+                            time_str = (time_els[0].text or "").strip()
+                    except Exception:
+                        pass
+
                     raw_text = (block.text or "").strip()
                     lines = [
                         ln.strip() for ln in raw_text.splitlines()
@@ -565,7 +579,7 @@ def _fetch_activity(driver, logger: Logger,
                     seen.add(key)
 
                     items.append({"tid": tid, "nick": nick, "type": conv_type,
-                                  "text": text, "url": item_url})
+                                  "text": text, "url": item_url, "time_str": time_str})
 
                 except Exception:
                     continue
@@ -588,11 +602,19 @@ def _fetch_activity(driver, logger: Logger,
 #  LOG HELPERS
 # ════════════════════════════════════════════════════════════════════════════════
 
-def _log_entry(sheets: SheetsManager, ws_log,
-               timestamp: str, tid: str, nick: str,
-               conv_type: str, direction: str,
-               message: str, url: str, status: str):
-    """Append one row to InboxLog sheet."""
+def _log_message_entry(sheets: SheetsManager, ws_log,
+                      timestamp: str, record_id: str, nick: str,
+                      conv_type: str, direction: str,
+                      message: str, url: str, status: str, date: str):
+    """Append one row to MessageLog sheet with date organization."""
     sheets.append_row(ws_log, [
-        timestamp, tid, nick, conv_type, direction, message, url, status,
+        date,        # DATE - for sorting and organization
+        timestamp,   # TIMESTAMP
+        record_id,   # RECORD_ID - person record ID
+        nick,        # NICK
+        conv_type,   # TYPE
+        direction,   # DIRECTION
+        message,     # MESSAGE
+        url,         # CONV_URL
+        status,      # STATUS
     ])
