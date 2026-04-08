@@ -68,6 +68,13 @@ _SEL_TYPE_SPAN      = "div.sp.cs.mrs span"
 _SEL_REPLY_FORM     = "form[action*='/direct-response/send']"
 _SEL_REPLY_TEXTAREA = "textarea[name='direct_response']"
 
+# ── Activity Selectors (from Playwright) ───────────────────────────────────────
+_SEL_ACTIVITY_BTN   = "button"  # Activity buttons like "POST ► ashi11-pk" - will filter by text
+_SEL_ACTIVITY_TAB   = "button"
+_SEL_REPLIES_TAB    = "button"
+_SEL_POST_BTN       = "button"
+_SEL_ACTIVITY_TEXT  = "button"  # Will filter by text content
+
 
 def run_messages(driver, sheets: SheetsManager, logger: Logger) -> Dict:
     """
@@ -143,16 +150,12 @@ def run_messages(driver, sheets: SheetsManager, logger: Logger) -> Dict:
 
     # ── Phase 2: Fetch activity ─────────────────────────────────────────────────
     logger.info("Phase 2: Fetching activity feed...")
-    activities = _fetch_activity(driver, logger)
+    activities = _fetch_activity(driver, logger, sheets=sheets)
     logger.info(f"Found {len(activities)} activity items")
 
     for activity in activities:
-        record_id = _generate_record_id(activity.get("tid", ""), activity.get("nick", ""))
-        msg_date = _extract_date_from_time(activity.get("time_str", ""))
-        
-        _log_message_entry(sheets, ws_log, pkt_stamp(), record_id, activity.get("nick", ""),
-                          "ACTIVITY", "ACTIVITY", activity.get("text", ""),
-                          activity.get("url", ""), "Logged", msg_date)
+        # Log activity using enhanced data structure
+        _log_activity_entry(sheets, ws_log, activity)
 
     # ── Phase 3: Send pending replies ─────────────────────────────────────────
     logger.info("Phase 3: Sending pending replies...")
@@ -489,113 +492,228 @@ def _send_reply(driver, conv_url: str, tid: str,
 #  FETCH ACTIVITY
 # ════════════════════════════════════════════════════════════════════════════════
 
-def _fetch_activity(driver, logger: Logger,
+def _fetch_activity(driver, logger: Logger, sheets: SheetsManager,
                     max_items: int = 60, max_pages: int = 5) -> List[Dict]:
-    """Fetch DamaDam activity feed from /inbox/activity/."""
+    """Fetch DamaDam activity feed from /inbox/activity/ with enhanced data extraction."""
     items: List[Dict] = []
     seen:  set         = set()
 
     try:
+        # Navigate to activity page
+        driver.get(_URL_ACTIVITY)
+        time.sleep(3)
+        
+        # Try to click ACTIVITY tab if available
+        try:
+            activity_buttons = driver.find_elements(By.CSS_SELECTOR, _SEL_ACTIVITY_TAB)
+            activity_tab = None
+            for btn in activity_buttons:
+                if "ACTIVITY" in btn.text.upper():
+                    activity_tab = btn
+                    break
+            
+            if activity_tab:
+                activity_tab.click()
+                time.sleep(2)
+        except Exception:
+            logger.info("ACTIVITY tab not found or not clickable, continuing with current view")
+
         for page_num in range(1, max_pages + 1):
             if len(items) >= max_items:
                 break
 
-            url = _URL_ACTIVITY if page_num == 1 else f"{_URL_ACTIVITY}?page={page_num}"
-            driver.get(url)
-            time.sleep(3)
+            # Handle pagination if needed
+            if page_num > 1:
+                try:
+                    driver.get(f"{_URL_ACTIVITY}?page={page_num}")
+                    time.sleep(3)
+                except Exception:
+                    break
 
-            blocks = driver.find_elements(By.CSS_SELECTOR, _SEL_ITEM_BLOCK)
-            if not blocks:
+            # Extract activity buttons and filter by text content
+            all_buttons = driver.find_elements(By.CSS_SELECTOR, _SEL_ACTIVITY_BTN)
+            activity_buttons = []
+            
+            # Filter buttons that contain activity-related text
+            for btn in all_buttons:
+                btn_text = btn.text.strip().upper()
+                if any(keyword in btn_text for keyword in ["POST", "REPLIED", "LIKED", "COMMENTED", "FOLLOWED"]):
+                    activity_buttons.append(btn)
+            
+            if not activity_buttons:
+                # Fallback to original selector
+                activity_buttons = driver.find_elements(By.CSS_SELECTOR, _SEL_ITEM_BLOCK)
+                
+            if not activity_buttons:
                 break
 
-            for block in blocks:
+            # Refresh the page reference to avoid stale elements
+            for i in range(len(activity_buttons)):
                 if len(items) >= max_items:
                     break
+                    
                 try:
-                    tid = ""
-                    try:
-                        btn = block.find_elements(By.CSS_SELECTOR, _SEL_TID_BTN)
-                        if btn:
-                            tid = (btn[0].get_attribute("value") or "").strip()
-                    except Exception:
-                        pass
-
-                    conv_type = "ACTIVITY"
-                    try:
-                        type_spans = block.find_elements(By.CSS_SELECTOR, _SEL_TYPE_SPAN)
-                        if type_spans:
-                            raw = (type_spans[0].text or "").strip().upper()
-                            if "1" in raw and "ON" in raw:
-                                conv_type = "1ON1"
-                            elif "POST" in raw:
-                                conv_type = "POST"
-                            elif "MEHFIL" in raw:
-                                conv_type = "MEHFIL"
-                    except Exception:
-                        pass
-
-                    nick = ""
-                    try:
-                        nick_els = block.find_elements(By.CSS_SELECTOR, _SEL_NICK_BDI)
-                        if nick_els:
-                            nick = (nick_els[0].text or "").strip()
-                    except Exception:
-                        pass
-
-                    # Time string
-                    time_str = ""
-                    try:
-                        time_els = block.find_elements(By.CSS_SELECTOR, _SEL_TIME_SPAN)
-                        if time_els:
-                            time_str = (time_els[0].text or "").strip()
-                    except Exception:
-                        pass
-
-                    raw_text = (block.text or "").strip()
-                    lines = [
-                        ln.strip() for ln in raw_text.splitlines()
-                        if ln.strip() and ln.strip() not in {"►", "REMOVE", "▶", "SKIP ALL ON PAGE"}
-                    ]
-                    text = " | ".join(lines)[:300]
-                    if not text:
+                    # Re-find elements to avoid stale references
+                    all_current_buttons = driver.find_elements(By.CSS_SELECTOR, _SEL_ACTIVITY_BTN)
+                    current_buttons = []
+                    
+                    # Filter buttons again
+                    for btn in all_current_buttons:
+                        btn_text = btn.text.strip().upper()
+                        if any(keyword in btn_text for keyword in ["POST", "REPLIED", "LIKED", "COMMENTED", "FOLLOWED"]):
+                            current_buttons.append(btn)
+                    
+                    if i >= len(current_buttons):
+                        break
+                        
+                    button = current_buttons[i]
+                    
+                    # Extract button text and attributes
+                    button_text = button.text.strip()
+                    button_value = button.get_attribute("value") or ""
+                    
+                    # Skip empty buttons
+                    if not button_text:
                         continue
-
-                    item_url = ""
-                    try:
-                        links = block.find_elements(
-                            By.CSS_SELECTOR,
-                            "a[href*='/comments/'], a[href*='/content/']"
-                        )
-                        if links:
-                            href = (links[0].get_attribute("href") or "").strip()
-                            if href:
-                                item_url = href if href.startswith("http") else f"{Config.BASE_URL}{href}"
-                    except Exception:
-                        pass
-
-                    key = (text[:80], item_url)
-                    if key in seen:
+                    
+                    # Parse activity information from button text
+                    activity_data = _parse_activity_button(button_text, button_value)
+                    if not activity_data:
                         continue
-                    seen.add(key)
-
-                    items.append({"tid": tid, "nick": nick, "type": conv_type,
-                                  "text": text, "url": item_url, "time_str": time_str})
-
-                except Exception:
+                    
+                    # Create unique identifier for duplicate prevention
+                    activity_id = f"{activity_data['type']}_{activity_data['post_key']}_{activity_data['name_key']}"
+                    
+                    # Check for duplicates using ScrapeState
+                    if _check_activity_duplicate(sheets, activity_id):
+                        continue
+                    
+                    # Save to ScrapeState to prevent future duplicates
+                    _save_activity_state(sheets, activity_id)
+                    
+                    # Get additional details if needed
+                    try:
+                        # Re-find and filter buttons again for click
+                        all_click_buttons = driver.find_elements(By.CSS_SELECTOR, _SEL_ACTIVITY_BTN)
+                        click_buttons = []
+                        
+                        for btn in all_click_buttons:
+                            btn_text = btn.text.strip().upper()
+                            if any(keyword in btn_text for keyword in ["POST", "REPLIED", "LIKED", "COMMENTED", "FOLLOWED"]):
+                                click_buttons.append(btn)
+                        
+                        if i < len(click_buttons):
+                            button = click_buttons[i]
+                            button.click()
+                            time.sleep(1)
+                            current_url = driver.current_url
+                            activity_data['url'] = current_url
+                            # Go back to activity page
+                            driver.back()
+                            time.sleep(1)
+                    except Exception:
+                        activity_data['url'] = _URL_ACTIVITY
+                    
+                    items.append(activity_data)
+                    
+                except Exception as e:
+                    logger.info(f"Error processing activity button: {e}")
                     continue
 
-            # Check for next page
-            try:
-                next_btns = driver.find_elements(By.CSS_SELECTOR, "a[href*='?page='] button")
-                if not any("NEXT" in (b.text or "").upper() for b in next_btns):
-                    break
-            except Exception:
-                break
-
     except Exception as e:
-        logger.error(f"Activity fetch error: {e}")
+        logger.error(f"Error fetching activity: {e}")
 
+    logger.info(f"Found {len(items)} activity items")
     return items
+
+
+def _parse_activity_button(button_text: str, button_value: str) -> Optional[Dict]:
+    """Parse activity button text to extract structured data."""
+    try:
+        # Parse button text like "POST ► ashi11-pk: post removed" or "POST ► pic Nimra-Mughal104:"
+        parts = button_text.split('►')
+        if len(parts) < 2:
+            return None
+        
+        activity_type = parts[0].strip().upper()  # POST, REPLIED, LIKED
+        rest = parts[1].strip()
+        
+        # Extract name and post details
+        name_key = ""
+        post_key = ""
+        description = ""
+        
+        if ':' in rest:
+            name_part, desc_part = rest.split(':', 1)
+            name_key = name_part.strip()
+            description = desc_part.strip()
+            
+            # Extract post key from button value or generate one
+            if button_value:
+                post_key = button_value
+            else:
+                post_key = f"{activity_type}_{name_key}_{hash(description) % 10000}"
+        else:
+            name_key = rest
+            description = ""
+            post_key = f"{activity_type}_{name_key}_{hash(button_text) % 10000}"
+        
+        return {
+            'type': activity_type,
+            'name_key': name_key,
+            'post_key': post_key,
+            'description': description,
+            'button_text': button_text,
+            'timestamp': pkt_stamp(),
+            'date': pkt_stamp().split(' ')[0]
+        }
+        
+    except Exception:
+        return None
+
+
+def _check_activity_duplicate(sheets: SheetsManager, activity_id: str) -> bool:
+    """Check if activity already exists in ScrapeState to prevent duplicates."""
+    try:
+        ws_state = sheets.get_worksheet(Config.SHEET_SCRAPE_STATE, headers=Config.SCRAPE_STATE_COLS)
+        if not ws_state:
+            return False
+            
+        existing_data = sheets.read_all(ws_state)
+        if len(existing_data) < 2:
+            return False
+            
+        headers = existing_data[0]
+        key_col = sheets.get_col(headers, "KEY")
+        value_col = sheets.get_col(headers, "VALUE")
+        
+        for row in existing_data[1:]:
+            if len(row) > max(key_col, value_col):
+                key = row[key_col].strip()
+                if key == f"activity_{activity_id}":
+                    return True
+        
+        return False
+        
+    except Exception:
+        return False
+
+
+def _save_activity_state(sheets: SheetsManager, activity_id: str):
+    """Save activity ID to ScrapeState to prevent future duplicates."""
+    try:
+        ws_state = sheets.get_worksheet(Config.SHEET_SCRAPE_STATE, headers=Config.SCRAPE_STATE_COLS)
+        if not ws_state:
+            return
+            
+        sheets.append_row(ws_state, [
+            f"activity_{activity_id}",  # KEY
+            "processed",                 # VALUE
+            pkt_stamp()                  # UPDATED
+        ])
+        
+    except Exception:
+        pass
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -618,3 +736,27 @@ def _log_message_entry(sheets: SheetsManager, ws_log,
         url,         # CONV_URL
         status,      # STATUS
     ])
+
+
+def _log_activity_entry(sheets: SheetsManager, ws_log, activity_data: Dict):
+    """Log activity entry with enhanced data structure."""
+    try:
+        record_id = f"ACTIVITY_{activity_data['post_key']}_{activity_data['name_key']}"
+        message = f"{activity_data['type']}: {activity_data['description']}"
+        
+        _log_message_entry(
+            sheets=sheets,
+            ws_log=ws_log,
+            timestamp=activity_data['timestamp'],
+            record_id=record_id,
+            nick=activity_data['name_key'],
+            conv_type=activity_data['type'],
+            direction="ACTIVITY",
+            message=message,
+            url=activity_data.get('url', ''),
+            status="Logged",
+            date=activity_data['date']
+        )
+        
+    except Exception as e:
+        logger.info(f"Error logging activity entry: {e}")
