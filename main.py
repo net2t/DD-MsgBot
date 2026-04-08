@@ -20,6 +20,8 @@ Local interactive menu:
 import sys
 import os
 import argparse
+import signal
+import threading
 
 from config import Config
 from utils.logger import Logger
@@ -71,6 +73,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  Signal Handling for Graceful Stopping
+# ═══════════════════════════════════════════════════════════════════════════════
+
+shutdown_requested = False
+
+def signal_handler(signum, frame):
+    """Handle Ctrl+C gracefully."""
+    global shutdown_requested
+    shutdown_requested = True
+    print("\n\n⚠️  Stop requested! Finishing current task...")
+    print("   Press Ctrl+C again to force quit immediately")
+
+def check_shutdown():
+    """Check if shutdown was requested."""
+    global shutdown_requested
+    return shutdown_requested
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  Interactive Local Menu
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -114,14 +134,13 @@ def _interactive_menu() -> tuple:
             print("  Goodbye!\n")
             sys.exit(0)
 
-        # Ask for a limit
+        # Ask for a limit for all modes
         max_items = 0
-        if mode in ("messages",):
-            limit_raw = input(
-                f"Max items to process? (Enter for unlimited, 0=unlimited): "
-            ).strip()
-            if limit_raw.isdigit():
-                max_items = int(limit_raw)
+        limit_raw = input(
+            f"Max items to process? (Enter for unlimited, 0=unlimited): "
+        ).strip()
+        if limit_raw.isdigit():
+            max_items = int(limit_raw)
 
         return mode, max_items, False
 
@@ -174,6 +193,9 @@ def _run_with_browser(mode: str, args) -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
+    # Register signal handler for graceful Ctrl+C
+    signal.signal(signal.SIGINT, signal_handler)
+    
     parser = _build_parser()
     args   = parser.parse_args()
 
