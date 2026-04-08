@@ -57,21 +57,6 @@ class Config:
     MAX_POST_PAGES    = int(os.getenv("DD_MAX_POST_PAGES",    "3") or "3")
     MSG_DELAY_SECONDS = float(os.getenv("DD_MSG_DELAY_SECONDS", "3") or "3")
 
-    # ── Post Mode ─────────────────────────────────────────────────────────────
-    POST_COOLDOWN_SECONDS = int(os.getenv("DD_POST_COOLDOWN_SECONDS", "135") or "135")
-    POST_CAPTION_MAX_LEN  = int(os.getenv("DD_POST_CAPTION_MAX_LEN",  "300") or "300")
-    POST_TAGS_MAX_LEN     = int(os.getenv("DD_POST_TAGS_MAX_LEN",     "120") or "120")
-    POST_MAX_REPEAT_CHARS = int(os.getenv("DD_POST_MAX_REPEAT_CHARS",   "6") or "6")
-    POST_SIGNATURE        = os.getenv("DD_POST_SIGNATURE", "").strip()
-
-    # ── Rekhta Mode ───────────────────────────────────────────────────────────
-    REKHTA_URL         = os.getenv("DD_REKHTA_URL", "https://www.rekhta.org/shayari-image")
-    REKHTA_MAX_SCROLLS = int(os.getenv("DD_REKHTA_MAX_SCROLLS", "6") or "6")
-
-    # ── Image Download ────────────────────────────────────────────────────────
-    IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("DD_IMAGE_DOWNLOAD_TIMEOUT", "90") or "90")
-    IMAGE_DOWNLOAD_RETRIES = int(os.getenv("DD_IMAGE_DOWNLOAD_RETRIES",  "3") or "3")
-
     # ── Logging ────────────────────────────────────────────────────────────────
     LOG_DIR = SCRIPT_DIR / "logs"
     LOG_DIR.mkdir(exist_ok=True)
@@ -85,64 +70,38 @@ class Config:
     # ════════════════════════════════════════════════════════════════════════════
 
     # Queue sheets  — bot reads from these to know what to do
-    SHEET_MSG_QUE      = "MsgQue"         # Message targets queue
-    SHEET_MESSAGE_QUEUE = "MessageQueue"   # Unified message queue (replaces InboxQue)
+    SHEET_MSG_QUE = "MsgQue"         # Unified queue (inbox sync + pending replies)
+    SHEET_MESSAGE_QUEUE = "MessageQueue"  # Original message queue sheet
+    SHEET_INBOX_QUE = "InboxQue"     # Inbox queue sheet
 
     # Log sheets    — bot writes results here after each action
-    SHEET_MSG_LOG      = "MsgLog"         # Every message sent (history per target)
-    SHEET_MESSAGE_LOG  = "MessageLog"     # Unified message log (replaces InboxLog)
+    SHEET_MSG_LOG = "MsgLog"         # Unified log (inbox events + activity + sent replies)
+    SHEET_MESSAGE_LOG = "MessageLog"    # Original message log sheet
+    SHEET_LOGS = "Logs"               # Master activity log
+    SHEET_INBOX_LOG = "InboxLog"      # Inbox log sheet
 
-    # Master log    — one row per any action across all modes
-    SHEET_LOGS         = "Logs"
-
-    # Scrape state  — pagination cursor so Mode 1 resumes instead of re-scanning
-    SHEET_SCRAPE_STATE = "ScrapeState"
-
-    # Dashboard     — summary/analysis (formulas only, bot never writes here)
-    SHEET_DASHBOARD = "Dashboard"
+    # State sheets  — pagination cursors and state
+    SHEET_SCRAPE_STATE = "ScrapeState"  # Pagination cursor storage
+    SHEET_DASHBOARD = "Dashboard"     # Summary/analysis sheet
 
     # ── Keep old names as aliases so existing code doesn't break ──────────────
-    SHEET_MASTER_LOG = SHEET_LOGS              # backwards compat alias
-    SHEET_MSG_LIST   = SHEET_MSG_QUE           # backwards compat alias
-    SHEET_INBOX_QUE  = SHEET_MESSAGE_QUEUE     # backwards compat alias
-    SHEET_INBOX_LOG  = SHEET_MESSAGE_LOG       # backwards compat alias
+    SHEET_MSG_LIST    = SHEET_MSG_QUE          # backwards compat alias
+    SHEET_INBOX_QUE   = SHEET_MSG_QUE          # backwards compat alias
+    SHEET_INBOX_LOG   = SHEET_MSG_LOG          # backwards compat alias
+    SHEET_MESSAGE_QUEUE = SHEET_MSG_QUE        # backwards compat alias
+    SHEET_MESSAGE_LOG   = SHEET_MSG_LOG        # backwards compat alias
+    SHEET_LOGS          = SHEET_MSG_LOG        # backwards compat alias
+    SHEET_MASTER_LOG    = SHEET_MSG_LOG        # backwards compat alias
+    SHEET_SCRAPE_STATE  = SHEET_MSG_LOG        # backwards compat alias
+    SHEET_DASHBOARD     = "Dashboard"         # retained name (not used by bot)
 
     # ════════════════════════════════════════════════════════════════════════════
     #  COLUMN DEFINITIONS — single source of truth for every sheet
     # ════════════════════════════════════════════════════════════════════════════
 
-    # ── MsgQue — message targets queue ────────────────────────────────────────
-    #  You fill this in. Bot reads it, sends messages, updates STATUS/NOTES/RESULT.
-    MSG_QUE_COLS = [
-        "MODE",       # A  Nick / URL
-        "NAME",       # B  Display name (your reference)
-        "NICK",       # C  DamaDam username or profile URL
-        "CITY",       # D  Scraped city       (read-only reference)
-        "POSTS",      # E  Scraped post count  (read-only reference)
-        "FOLLOWERS",  # F  Scraped followers   (read-only reference)
-        "GENDER",     # G  Scraped gender      (read-only reference)
-        "MESSAGE",    # H  Template text — supports {{name}}, {{city}} placeholders
-        "STATUS",     # I  Pending → Done / Skipped / Failed
-        "NOTES",      # J  Set by bot
-        "RESULT",     # K  URL of post where message was sent
-        "SENT_MSG",   # L  Actual resolved message that was sent (set by bot)
-    ]
-
-    # ── MsgLog — one row per message sent ─────────────────────────────────────
-    #  Bot appends here after every successful or failed message attempt.
-    MSG_LOG_COLS = [
-        "TIMESTAMP",  # A  PKT timestamp
-        "NICK",       # B  Target username
-        "NAME",       # C  Display name
-        "MESSAGE",    # D  Message text that was sent
-        "POST_URL",   # E  URL of post the message was sent on
-        "STATUS",     # F  Sent / Failed / Skipped
-        "NOTES",      # G  Error or extra detail
-    ]
-
-    # ── MessageQueue — unified message queue (replaces InboxQue) ───────────────────
+    # ── MsgQue — unified message queue (replaces InboxQue/MessageQueue) ─────────
     #  Bot syncs new conversations here. You fill MY_REPLY. Bot sends it.
-    MESSAGE_QUEUE_COLS = [
+    MSG_QUE_COLS = [
         "RECORD_ID",    # A  Unique record ID (TID_NICK or NOID_NICK)
         "DATE",         # B  Date of conversation (YYYY-MM-DD)
         "NICK",         # C  DamaDam username
@@ -156,9 +115,9 @@ class Config:
         "NOTES",        # K  Set by bot
     ]
 
-    # ── MessageLog — unified message log (replaces InboxLog) ───────────────────────
+    # ── MsgLog — unified message log (replaces InboxLog/MessageLog/Logs) ───────
     #  One row per message event or activity item. Complete history organized by date.
-    MESSAGE_LOG_COLS = [
+    MSG_LOG_COLS = [
         "DATE",        # A  Date of message (YYYY-MM-DD) - for sorting
         "TIMESTAMP",   # B  PKT timestamp
         "RECORD_ID",   # C  Person record ID (TID_NICK or NOID_NICK)
@@ -170,56 +129,70 @@ class Config:
         "STATUS",      # I  Received / Sent / Failed / Logged
     ]
 
-    # ── Logs — master log (one row per any bot action) ─────────────────────────
+    # ── MessageQueue — Original message queue sheet ─────────────────────────────
+    MESSAGE_QUEUE_COLS = [
+        "MODE",        # A  Nick or URL
+        "NAME",        # B  Display name (your reference)
+        "NICK",        # C  DamaDam username or profile URL
+        "CITY",        # D  Scraped city (read-only)
+        "POSTS",       # E  Scraped post count (read-only)
+        "FOLLOWERS",   # F  Scraped follower count (read-only)
+        "GENDER",      # G  Scraped gender (read-only)
+        "MESSAGE",     # H  Message text — supports {{name}}, {{city}} placeholders
+        "STATUS",      # I  Pending → Done / Skipped / Failed
+        "NOTES",       # J  Set by bot after each run
+        "RESULT",      # K  URL of the post where message was sent
+        "SENT_MSG",    # L  Actual resolved message that was sent
+    ]
+
+    # ── MessageLog — Original message log sheet ────────────────────────────────
+    MESSAGE_LOG_COLS = [
+        "TIMESTAMP",   # A  PKT timestamp
+        "NICK",        # B  Username
+        "NAME",        # C  Display name
+        "MESSAGE",     # D  Message text
+        "POST_URL",    # E  URL of the post
+        "STATUS",      # F  Sent / Failed / Skipped
+        "NOTES",       # G  Additional notes
+    ]
+
+    # ── Logs — Master activity log sheet ───────────────────────────────────────
     LOGS_COLS = [
-        "TIMESTAMP",  # A
-        "MODE",       # B
-        "ACTION",     # C
-        "NICK",       # D
-        "URL",        # E
-        "STATUS",     # F
-        "DETAILS",    # G
+        "TIMESTAMP",   # A  PKT timestamp
+        "MODE",        # B  Mode name
+        "ACTION",      # C  Action performed
+        "NICK",        # D  Username
+        "URL",         # E  Related URL
+        "STATUS",      # F  Status
+        "DETAILS",     # G  Additional details
     ]
 
-    # ── RunLog — one row per complete bot run ─────────────────────────────────
-    RUN_LOG_COLS = [
-        "TIMESTAMP",  # A  When the run started (PKT)
-        "MODE",       # B  Which mode was run (rekhta/msg/post/inbox/setup)
-        "STATUS",     # C  Done / Failed / Stopped
-        "ADDED",      # D  Items added    (Rekhta: new rows in PostQue)
-        "POSTED",     # E  Posts created  (Post mode)
-        "SENT",       # F  Messages sent  (Msg / Inbox reply)
-        "FAILED",     # G  Failures
-        "SKIPPED",    # H  Skipped rows
-        "DURATION",   # I  How long the run took (seconds)
-        "NOTES",      # J  Extra info or error summary
-    ]
-
-    # ── ScrapeState — key/value store for pagination cursors ──────────────────
+    # ── ScrapeState — Pagination cursor storage ───────────────────────────────
     SCRAPE_STATE_COLS = [
-        "KEY",        # A  State key (e.g. "rekhta_last_page")
-        "VALUE",      # B  State value
-        "UPDATED",    # C  When this value was last written
+        "KEY",         # A  State key
+        "VALUE",       # B  State value
+        "UPDATED",     # C  Last update timestamp
     ]
 
     # ── Backwards compat aliases for column lists ──────────────────────────────
-    MSG_LIST_COLS       = MSG_QUE_COLS
-    MASTER_LOG_COLS     = LOGS_COLS
-    INBOX_COLS          = MESSAGE_QUEUE_COLS
-    INBOX_QUE_COLS      = MESSAGE_QUEUE_COLS   # backwards compat
-    INBOX_LOG_COLS      = MESSAGE_LOG_COLS     # backwards compat
+    MSG_LIST_COLS   = MSG_QUE_COLS
+    INBOX_COLS      = MSG_QUE_COLS
+    INBOX_QUE_COLS  = MSG_QUE_COLS
+    INBOX_LOG_COLS  = MSG_LOG_COLS
+    LOGS_COLS       = MSG_LOG_COLS
+    MASTER_LOG_COLS = MSG_LOG_COLS
 
     # ════════════════════════════════════════════════════════════════════════════
     #  All sheets in setup order
     # ════════════════════════════════════════════════════════════════════════════
     ALL_SHEETS = {
-        SHEET_MSG_QUE:         MSG_QUE_COLS,
-        SHEET_MESSAGE_QUEUE:   MESSAGE_QUEUE_COLS,
-        SHEET_MSG_LOG:         MSG_LOG_COLS,
-        SHEET_MESSAGE_LOG:     MESSAGE_LOG_COLS,
-        SHEET_LOGS:            LOGS_COLS,
-        SHEET_SCRAPE_STATE:    SCRAPE_STATE_COLS,
-        # Dashboard has no fixed columns — it's formula-based, created empty
+        SHEET_MSG_QUE: MSG_QUE_COLS,
+        SHEET_MSG_LOG: MSG_LOG_COLS,
+        SHEET_MESSAGE_QUEUE: MESSAGE_QUEUE_COLS,
+        SHEET_MESSAGE_LOG: MESSAGE_LOG_COLS,
+        SHEET_LOGS: LOGS_COLS,
+        SHEET_SCRAPE_STATE: SCRAPE_STATE_COLS,
+        SHEET_DASHBOARD: [],  # Dashboard has no predefined columns
     }
 
     @classmethod

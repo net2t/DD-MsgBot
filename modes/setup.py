@@ -22,11 +22,18 @@ from core.sheets import SheetsManager
 # These are the names from previous versions that should be removed.
 _OLD_SHEET_NAMES = [
     "MsgList",
+    "MsgQue",
+    "MsgLog",
     "PostQueue",
     "InboxQueue",
     "InboxQue",
     "InboxLog",
+    "MessageQueue",
+    "MessageLog",
     "MasterLog",
+    "Logs",
+    "ScrapeState",
+    "Dashboard",
     "RunLog",
     "Sheet1",       # Default Google Sheets tab
 ]
@@ -71,22 +78,8 @@ def run(sheets: SheetsManager, logger: Logger):
         else:
             logger.error(f"Failed to create: {sheet_name}")
 
-    # ── Step 3: Create Dashboard tab (empty — formula-based) ─────────────────
-    logger.info("Creating: Dashboard")
-    try:
-        existing_now = [ws.title for ws in sheets._wb.worksheets()]
-        if Config.SHEET_DASHBOARD not in existing_now:
-            sheets._wb.add_worksheet(
-                title=Config.SHEET_DASHBOARD, rows=50, cols=10
-            )
-            logger.ok("Dashboard — created (empty, add your formulas here)")
-        else:
-            logger.ok("Dashboard — already exists")
-    except Exception as e:
-        logger.warning(f"Dashboard creation failed: {e}")
-
-    logger.section("SETUP COMPLETE — All 7 sheets ready")
-    logger.info("Sheet order: MsgQue -> MessageQueue -> MsgLog -> MessageLog -> Logs -> ScrapeState -> Dashboard")
+    logger.section("SETUP COMPLETE — Original sheets ready")
+    logger.info("Sheet order: MsgQue -> MsgLog -> MessageQueue -> MessageLog -> Logs -> ScrapeState -> Dashboard")
 
 
 def run_format(sheets: SheetsManager, logger: Logger):

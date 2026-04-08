@@ -82,10 +82,10 @@ def run_messages(driver, sheets: SheetsManager, logger: Logger) -> Dict:
 
     logger.section("UNIFIED MESSAGE MODE")
 
-    ws_queue = sheets.get_worksheet(Config.SHEET_MESSAGE_QUEUE, headers=Config.MESSAGE_QUEUE_COLS)
-    ws_log = sheets.get_worksheet(Config.SHEET_MESSAGE_LOG, headers=Config.MESSAGE_LOG_COLS)
+    ws_queue = sheets.get_worksheet(Config.SHEET_MSG_QUE, headers=Config.MSG_QUE_COLS)
+    ws_log = sheets.get_worksheet(Config.SHEET_MSG_LOG, headers=Config.MSG_LOG_COLS)
     if not ws_queue or not ws_log:
-        logger.error("MessageQueue or MessageLog sheet not found — run Setup first")
+        logger.error("MsgQue or MsgLog sheet not found — run Setup first")
         return {}
 
     # ── Phase 1: Fetch inbox ──────────────────────────────────────────────────
@@ -94,7 +94,7 @@ def run_messages(driver, sheets: SheetsManager, logger: Logger) -> Dict:
     logger.info(f"Found {len(inbox_items)} conversations in inbox")
 
     all_queue_rows = sheets.read_all(ws_queue)
-    queue_headers  = all_queue_rows[0] if all_queue_rows else Config.MESSAGE_QUEUE_COLS
+    queue_headers  = all_queue_rows[0] if all_queue_rows else Config.MSG_QUE_COLS
     queue_hmap     = SheetsManager.build_header_map(queue_headers)
 
     def qcell(row, *names):

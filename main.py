@@ -27,7 +27,6 @@ from core.browser import BrowserManager
 from core.login import LoginManager
 from core.sheets import SheetsManager
 
-import modes.message   as message_mode
 import modes.messages  as messages_mode
 
 
@@ -44,8 +43,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "mode", nargs="?",
-        choices=["msg", "messages"],
-        help="Mode to run (omit for interactive menu): msg=send messages, messages=inbox+activity",
+        choices=["msg", "messages", "setup"],
+        help="Mode to run (omit for interactive menu): msg=send messages, messages=unified inbox+activity, setup=create sheets",
     )
     p.add_argument(
         "--max", dest="max_items", type=int, default=0, metavar="N",
@@ -79,8 +78,7 @@ _MENU = """
 ║           DD-Msg-Bot V4.1.0  —  DamaDam.pk Bot           ║
 ╠══════════════════════════════════════════════════════════╣
 ║                                                          ║
-║   1.  📤 Send Messages                                   ║
-║   2.  📥 Inbox Activity (Sync + Log)                     ║
+║   1.  📥 Messages (Sync Inbox + Activity + Send Replies) ║
 ║                                                          ║
 ║   0.  Exit                                               ║
 ╚══════════════════════════════════════════════════════════╝
@@ -98,13 +96,12 @@ def _interactive_menu() -> tuple:
         raw = input("  Enter choice: ").strip()
 
         mode_map = {
-            "1": "msg",
-            "2": "messages",
+            "1": "messages",
             "0": None,
         }
 
         if raw not in mode_map:
-            print("  ⚠  Invalid choice — enter 1, 2 or 0 to exit.\n")
+            print("  ⚠  Invalid choice — enter 1 or 0 to exit.\n")
             continue
 
         mode = mode_map[raw]
@@ -112,9 +109,9 @@ def _interactive_menu() -> tuple:
             print("  Goodbye!\n")
             sys.exit(0)
 
-        # For both modes, ask for a limit
+        # Ask for a limit
         max_items = 0
-        if mode in ("msg", "messages"):
+        if mode in ("messages",):
             limit_raw = input(
                 f"Max items to process? (Enter for unlimited, 0=unlimited): "
             ).strip()
@@ -157,7 +154,7 @@ def _run_with_browser(mode: str, args) -> None:
         max_n = getattr(args, "max_items", 0)
 
         if mode == "msg":
-            message_mode.run(driver, sheets, logger, max_targets=max_n)
+            messages_mode.run(driver, sheets, logger, max_n)
         elif mode == "messages":
             messages_mode.run_messages(driver, sheets, logger)
 
@@ -194,7 +191,17 @@ def main():
             Config.DEBUG = True
 
     # ── Dispatch ─────────────────────────────────────────────────────────────
-    if mode in ("msg", "messages"):
+    if mode == "setup":
+        from modes.setup import run
+        logger = Logger("setup")
+        logger.section("SETUP MODE")
+        Config.validate()
+        sheets = SheetsManager(logger)
+        if not sheets.connect():
+            logger.error("Google Sheets connection failed — aborting")
+            sys.exit(1)
+        run(sheets, logger)
+    elif mode in ("msg", "messages"):
         _run_with_browser(mode, args)
     else:
         parser.error(f"Unknown mode: {mode}")

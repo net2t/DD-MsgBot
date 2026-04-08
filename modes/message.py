@@ -65,14 +65,14 @@ def run(driver, sheets: SheetsManager, logger: Logger,
 
     logger.section("MESSAGE MODE")
 
-    ws = sheets.get_worksheet(Config.SHEET_MSG_QUE, headers=Config.MSG_QUE_COLS)
+    ws = sheets.get_worksheet(Config.SHEET_MESSAGE_QUEUE, headers=Config.MESSAGE_QUEUE_COLS)
     if not ws:
-        logger.error("MsgQue sheet not found")
+        logger.error("MessageQueue sheet not found")
         return {}
 
     all_rows = sheets.read_all(ws)
     if len(all_rows) < 2:
-        logger.info("MsgQue is empty — nothing to do")
+        logger.info("MessageQueue is empty — nothing to do")
         return {"done": 0, "skipped": 0, "failed": 0, "total": 0}
 
     headers    = all_rows[0]
@@ -600,8 +600,8 @@ def _process_template(template: str, profile: Dict) -> str:
 
 def _write_msg_log(sheets: SheetsManager, nick: str, name: str,
                    message: str, post_url: str, status: str, notes: str):
-    """Append one row to MsgLog sheet."""
-    ws = sheets.get_worksheet(Config.SHEET_MSG_LOG, headers=Config.MSG_LOG_COLS)
+    """Append one row to MessageLog sheet."""
+    ws = sheets.get_worksheet(Config.SHEET_MESSAGE_LOG, headers=Config.MESSAGE_LOG_COLS)
     if not ws:
         return
     sheets.append_row(ws, [

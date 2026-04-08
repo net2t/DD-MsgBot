@@ -6,8 +6,7 @@ A streamlined Python bot for DamaDam.pk featuring unified message management: co
 
 ## Features
 
-- **Message Mode**: Send personalized messages to users via nicknames or direct post URLs
-- **Messages Mode**: Unified inbox + activity management with date-organized logging
+- **Messages Mode**: Unified inbox + activity management with date-organized logging and reply sending
 
 ---
 
@@ -76,7 +75,7 @@ python main.py <mode> [--max N] [--debug] [--headless]
 
 | Argument | Description |
 |----------|--------------|
-| `mode` | One of: `msg messages setup` |
+| `mode` | One of: `messages setup` |
 | `--max N` | Process only N items (default: 0 = unlimited) |
 | `--debug` | Verbose debug output |
 | `--headless` | Force headless browser (auto-enabled in CI) |
@@ -84,38 +83,9 @@ python main.py <mode> [--max N] [--debug] [--headless]
 **Examples:**
 
 ```bash
-python main.py msg --max 5          # Send to 5 targets only
-python main.py messages             # Unified inbox + activity management
+python main.py messages             # Unified inbox + activity management + send replies
 python main.py setup                # Create/initialize sheets
 ```
-
----
-
-## GitHub Actions
-
-A single workflow file (`.github/workflows/bot.yml`) handles all 5 scheduled runs:
-
-| Mode | Schedule |
-|------|----------|
-| 🎀 Rekhta | Every 1 hour |
-| 🎀 Message | Once a day (06:00 PKT) |
-| 🎀 Post | Every 2 hours |
-| 🎀 Inbox | Every 15 minutes |
-| 🎀 Activity | Every 18 minutes |
-
-**Manual run:** Go to **Actions → DD-Msg-Bot → Run workflow** and pick any mode from the dropdown.
-
-### Required GitHub Secrets
-
-| Secret | Description |
-|--------|--------------|
-| `DD_LOGIN_EMAIL` | DamaDam username (nick) |
-| `DD_LOGIN_PASS` | DamaDam password |
-| `DD_SHEET_ID` | Google Sheets ID |
-| `GOOGLE_CREDENTIALS_JSON` | Full contents of `credentials.json` (paste the JSON) |
-| `DD_LOGIN_EMAIL2` | *(optional)* Backup account username |
-| `DD_LOGIN_PASS2` | *(optional)* Backup account password |
-| `GEMINI_API_KEY` | *(optional)* For Urdu transliteration via Gemini API |
 
 ---
 
@@ -123,26 +93,7 @@ A single workflow file (`.github/workflows/bot.yml`) handles all 5 scheduled run
 
 ### MsgQue
 
-Targets for Message Mode.
-
-| Column | Description |
-|--------|--------------|
-| MODE | Nick or URL |
-| NAME | Display name (your reference) |
-| NICK | DamaDam username or profile URL |
-| CITY | Scraped city (read-only) |
-| POSTS | Scraped post count (read-only) |
-| FOLLOWERS | Scraped follower count (read-only) |
-| GENDER | Scraped gender (read-only) |
-| MESSAGE | Message text — supports `{{name}}`, `{{city}}` placeholders |
-| STATUS | `Pending` → `Done` / `Skipped` / `Failed` |
-| NOTES | Set by bot after each run |
-| RESULT | URL of the post where message was sent |
-| SENT_MSG | Actual resolved message that was sent |
-
-### MessageQueue
-
-Unified message queue (replaces InboxQue). Organized by person record ID.
+Unified message queue (inbox sync + pending replies). Organized by person record ID.
 
 | Column | Description |
 |--------|--------------|
@@ -158,9 +109,9 @@ Unified message queue (replaces InboxQue). Organized by person record ID.
 | UPDATED | Timestamp of last sync |
 | NOTES | Set by bot |
 
-### MessageLog
+### MsgLog
 
-Unified message log (replaces InboxLog). Organized by date with complete history.
+Unified message log (inbox events + activity + sent replies). Organized by date with complete history.
 
 | Column | Description |
 |--------|--------------|
@@ -173,15 +124,6 @@ Unified message log (replaces InboxLog). Organized by date with complete history
 | MESSAGE | Message text or activity description |
 | CONV_URL | Link to conversation or post |
 | STATUS | Received / Sent / Failed / Logged |
-
-### Other Sheets
-
-- **MsgLog**: History of all sent messages
-- **PostQue**: Post content queue (if using post mode)
-- **PostLog**: History of created posts
-- **Logs**: Master activity log
-- **ScrapeState**: Pagination cursors
-- **Dashboard**: Summary/analysis (formulas only)
 
 ---
 
@@ -200,35 +142,24 @@ DD-Msg-Bot/
 │   ├── login.py             ← Cookie → primary → backup login chain
 │   └── sheets.py            ← All Google Sheets operations
 ├── modes/
-│   ├── message.py           ← Message Mode
-│   ├── post.py              ← Post Mode (cooldown + duplicate detection)
-│   ├── rekhta.py            ← Rekhta scraper
-│   ├── inbox.py             ← Inbox + Activity modes
-│   ├── logs.py              ← Log viewer
+│   ├── messages.py          ← Unified Messages Mode (inbox + activity + replies)
+│   ├── message.py           ← Legacy message sending (kept for compatibility)
 │   └── setup.py             ← Sheet setup + formatting
 ├── utils/
 │   ├── logger.py            ← Console + file logging (PKT timestamps)
-│   └── helpers.py           ← Image download, caption sanitization, URL helpers
+│   └── helpers.py           ├── URL helpers, text sanitization
 ├── .github/
 │   └── workflows/
-│       └── bot.yml          ← Single workflow: all 5 schedules + manual trigger
+│       └── bot.yml          ← Workflow for scheduled runs
 └── logs/                    ← Auto-created log files (gitignored)
 ```
-
----
-
-## Post Mode Rules
-
-- **Cooldown:** Minimum 135 seconds between posts (DamaDam rate limit)
-- **Duplicate images:** If `IMG_LINK` was already posted → mark `Repeating`, skip, never retry
-- **Rate limit hit:** Wait the required time → retry once only
-- **Any other error:** Mark `Failed`, move on — never retry automatically
 
 ---
 
 ## Notes
 
 - All timestamps are **Pakistan Standard Time (PKT, UTC+5)**
-- Bot never overwrites the read-only reference columns in MsgList (CITY, POSTS, FOLLOWERS, GENDER)
+- Bot never overwrites read-only columns in MsgQue (TID, TYPE, LAST_MESSAGE)
 - `damadam_cookies.pkl` stores session cookies for faster login — gitignored
 - Log files are written to `logs/` — one file per mode per day
+- Only two Google Sheets tabs are used: `MsgQue` and `MsgLog`

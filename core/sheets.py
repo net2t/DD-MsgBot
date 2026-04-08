@@ -365,26 +365,27 @@ class SheetsManager:
     def log_action(self, mode: str, action: str, nick: str = "",
                    url: str = "", status: str = "", details: str = ""):
         """
-        Append one row to the MasterLog sheet.
-        Called after every significant action across all modes.
+        Append one row to the unified MsgLog sheet.
         """
-        ws = self.get_worksheet(Config.SHEET_LOGS,
-                                 headers=Config.LOGS_COLS)
+        ws = self.get_worksheet(Config.SHEET_MSG_LOG, headers=Config.MSG_LOG_COLS)
         if not ws:
             return
+        ts = pkt_stamp()
         self.append_row(ws, [
-            pkt_stamp(),  # TIMESTAMP
-            mode,         # MODE
-            action,       # ACTION
-            nick,         # NICK
-            url,          # URL
-            status,       # STATUS
-            details,      # DETAILS
+            ts.split(" ")[0],
+            ts,
+            "",
+            nick,
+            "SYSTEM",
+            "ACTIVITY",
+            f"{mode}:{action}" + (f" | {details}" if details else ""),
+            url,
+            status or "Logged",
         ])
 
     def log_run(self, mode: str, stats: dict, duration_s: float = 0, notes: str = ""):
         """
-        Log a completed run to the Logs sheet.
+        Log a completed run to the unified MsgLog sheet.
         
         Args:
             mode:       Mode name (msg / messages / setup)
@@ -392,8 +393,7 @@ class SheetsManager:
             duration_s: Run duration in seconds
             notes:      Optional extra info or error summary
         """
-        # Use Logs sheet instead of RunLog (removed in V4.1.0)
-        ws = self.get_worksheet(Config.SHEET_LOGS, headers=Config.LOGS_COLS)
+        ws = self.get_worksheet(Config.SHEET_MSG_LOG, headers=Config.MSG_LOG_COLS)
         if not ws:
             return
         
@@ -401,7 +401,6 @@ class SheetsManager:
         if stats.get("failed", 0) > 0 and not stats.get("posted", 0) and not stats.get("sent", 0):
             overall = "Failed"
         
-        # Create a summary for the DETAILS field
         details = f"Duration: {duration_s:.1f}s"
         if stats.get("sent", 0):
             details += f" | Sent: {stats['sent']}"
@@ -412,58 +411,20 @@ class SheetsManager:
         if notes:
             details += f" | {notes}"
             
+        ts = pkt_stamp()
         self.append_row(ws, [
-            pkt_stamp(),                       # TIMESTAMP
-            mode.upper(),                      # MODE
-            "run_completed",                  # ACTION
-            "",                               # NICK
-            "",                               # URL
-            overall,                           # STATUS
-            details,                           # DETAILS
+            ts.split(" ")[0],
+            ts,
+            "",
+            "",
+            "SYSTEM",
+            "ACTIVITY",
+            f"{mode.upper()}:run_completed | {details}",
+            "",
+            overall,
         ])
 
-    # ════════════════════════════════════════════════════════════════════════════
-    #  ScrapeState — key/value pagination cursor store
-    # ════════════════════════════════════════════════════════════════════════════
-
-    def get_scrape_state(self, key: str) -> str:
-        """
-        Read a value from the ScrapeState sheet by key.
-        Returns the value string, or "" if not found.
-        """
-        try:
-            ws = self.get_worksheet(Config.SHEET_SCRAPE_STATE,
-                                    headers=Config.SCRAPE_STATE_COLS)
-            if not ws:
-                return ""
-            rows = ws.get_all_values()
-            for row in rows[1:]:  # skip header
-                if row and str(row[0]).strip() == key:
-                    return str(row[1]).strip() if len(row) > 1 else ""
-        except Exception as e:
-            self.log.debug(f"get_scrape_state({key}) error: {e}")
-        return ""
-
-    def set_scrape_state(self, key: str, value: str):
-        """
-        Write (or update) a key/value pair in the ScrapeState sheet.
-        If the key already exists, updates in-place.  Otherwise appends.
-        """
-        try:
-            ws = self.get_worksheet(Config.SHEET_SCRAPE_STATE,
-                                    headers=Config.SCRAPE_STATE_COLS)
-            if not ws:
-                return
-            rows = ws.get_all_values()
-            for i, row in enumerate(rows[1:], start=2):
-                if row and str(row[0]).strip() == key:
-                    ws.update(f"B{i}:C{i}", [[value, pkt_stamp()]])
-                    return
-            # Key not found — append new row
-            self.append_row(ws, [key, value, pkt_stamp()])
-        except Exception as e:
-            self.log.debug(f"set_scrape_state({key}) error: {e}")
-
+    
 
 
     # ════════════════════════════════════════════════════════════════════════════

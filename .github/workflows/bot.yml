@@ -15,16 +15,16 @@ on:
       max_items:
         description: 'Max items to process (0 = unlimited)'
         required: false
-        default: '10'
+        default: '100'
       debug:
         description: 'Enable debug logging'
         required: false
         default: false
         type: boolean
 
-  # ── Scheduled: Send messages every 2 hours ────────────────────────────────
+  # ── Scheduled: Send messages every 30 minutes ───────────────────────────────
   schedule:
-    - cron: '0 */2 * * *'   # every 2 hours — send messages
+    - cron: '*/30 * * * *'   # every 30 minutes — send messages
 
 permissions:
   contents: read
@@ -63,7 +63,7 @@ jobs:
           else
             # Scheduled run = send messages
             echo "mode=msg" >> $GITHUB_OUTPUT
-            echo "max=20" >> $GITHUB_OUTPUT
+            echo "max=100" >> $GITHUB_OUTPUT
             echo "debug=false" >> $GITHUB_OUTPUT
           fi
 
