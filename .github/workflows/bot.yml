@@ -75,7 +75,6 @@ jobs:
           DD_LOGIN_PASS2:          ${{ secrets.DD_LOGIN_PASS2 }}
           DD_SHEET_ID:             ${{ secrets.DD_SHEET_ID }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-          GEMINI_API_KEY:          ${{ secrets.GEMINI_API_KEY }}
           DD_HEADLESS:             "1"
           DD_DEBUG:                "${{ steps.params.outputs.debug }}"
         run: |
