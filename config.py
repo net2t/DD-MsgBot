@@ -83,6 +83,7 @@ class Config:
     # State sheets  — pagination cursors and state
     SHEET_SCRAPE_STATE = "ScrapeState"  # Pagination cursor storage
     SHEET_DASHBOARD = "Dashboard"     # Summary/analysis sheet
+    SHEET_RUN_LOG = "RunLog"          # Run history and statistics
 
     # ── Keep old names as aliases so existing code doesn't break ──────────────
     SHEET_MSG_LIST    = SHEET_MSG_QUE          # backwards compat alias
