@@ -1,0 +1,110 @@
+name: Enhanced Activity Mode
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Mode to run'
+        required: true
+        default: 'messages'
+        type: choice
+        options:
+        - msg
+        - messages
+        - setup
+      max_items:
+        description: 'Maximum items to process (0 = unlimited)'
+        required: false
+        default: '50'
+        type: string
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    # Run enhanced activity mode every hour
+    - cron: '0 * * * *'
+  push:
+    branches: [ focused-3-modes ]
+    paths:
+      - 'modes/messages.py'
+      - 'modes/message.py'
+      - '.github/workflows/enhanced-activity.yml'
+
+jobs:
+  enhanced-activity:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Set up Chrome
+      uses: browser-actions/setup-chrome@latest
+      with:
+        chrome-version: stable
+        
+    - name: Set up ChromeDriver
+      uses: browser-actions/setup-chromedriver@latest
+      
+    - name: Determine parameters
+      id: params
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
+          echo "max=${{ github.event.inputs.max_items }}" >> $GITHUB_OUTPUT
+          echo "debug=${{ github.event.inputs.debug }}" >> $GITHUB_OUTPUT
+        else
+          # Scheduled run = enhanced activity mode
+          echo "mode=messages" >> $GITHUB_OUTPUT
+          echo "max=100" >> $GITHUB_OUTPUT
+          echo "debug=false" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Run Enhanced Activity Bot
+      env:
+        DD_LOGIN_EMAIL:          ${{ secrets.DD_LOGIN_EMAIL }}
+        DD_LOGIN_PASS:           ${{ secrets.DD_LOGIN_PASS }}
+        DD_LOGIN_EMAIL2:         ${{ secrets.DD_LOGIN_EMAIL2 }}
+        DD_LOGIN_PASS2:          ${{ secrets.DD_LOGIN_PASS2 }}
+        DD_SHEET_ID:             ${{ secrets.DD_SHEET_ID }}
+        GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        DD_HEADLESS:             "1"
+        DD_DEBUG:                "${{ steps.params.outputs.debug }}"
+      run: |
+        echo "🚀 Starting Enhanced Activity Bot"
+        echo "Mode: ${{ steps.params.outputs.mode }}"
+        echo "Max Items: ${{ steps.params.outputs.max }}"
+        echo "Debug: ${{ steps.params.outputs.debug }}"
+        echo ""
+        
+        python main.py ${{ steps.params.outputs.mode }} --max ${{ steps.params.outputs.max }} ${{ steps.params.outputs.debug == 'true' && '--debug' || '' }}
+        
+    - name: Run Summary
+      run: |
+        echo "## ✅ Enhanced Activity Bot Complete" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Mode:** ${{ steps.params.outputs.mode }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Max Items:** ${{ steps.params.outputs.max }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Debug:** ${{ steps.params.outputs.debug }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Status:** Completed successfully" >> $GITHUB_STEP_SUMMARY
