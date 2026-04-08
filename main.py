@@ -79,7 +79,9 @@ _MENU = """
 ║           DD-Msg-Bot V4.1.0  —  DamaDam.pk Bot           ║
 ╠══════════════════════════════════════════════════════════╣
 ║                                                          ║
-║   1.  📥 Messages (Sync Inbox + Activity + Send Replies) ║
+║   1.  Send Messages (Message Mode)                       ║
+║   2.  Sync Messages (Inbox + Activity Mode)             ║
+║   3.  Setup (Create/Refresh Sheets)                     ║
 ║                                                          ║
 ║   0.  Exit                                               ║
 ╚══════════════════════════════════════════════════════════╝
@@ -97,12 +99,14 @@ def _interactive_menu() -> tuple:
         raw = input("  Enter choice: ").strip()
 
         mode_map = {
-            "1": "messages",
+            "1": "msg",
+            "2": "messages", 
+            "3": "setup",
             "0": None,
         }
 
         if raw not in mode_map:
-            print("  ⚠  Invalid choice — enter 1 or 0 to exit.\n")
+            print("  ⚠  Invalid choice — enter 1, 2, 3, or 0 to exit.\n")
             continue
 
         mode = mode_map[raw]
