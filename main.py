@@ -28,6 +28,7 @@ from core.login import LoginManager
 from core.sheets import SheetsManager
 
 import modes.messages  as messages_mode
+import modes.message   as message_mode
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -154,7 +155,7 @@ def _run_with_browser(mode: str, args) -> None:
         max_n = getattr(args, "max_items", 0)
 
         if mode == "msg":
-            messages_mode.run(driver, sheets, logger, max_n)
+            message_mode.run(driver, sheets, logger, max_n)
         elif mode == "messages":
             messages_mode.run_messages(driver, sheets, logger)
 

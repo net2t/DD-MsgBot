@@ -88,12 +88,12 @@ class Config:
     SHEET_MSG_LIST    = SHEET_MSG_QUE          # backwards compat alias
     SHEET_INBOX_QUE   = SHEET_MSG_QUE          # backwards compat alias
     SHEET_INBOX_LOG   = SHEET_MSG_LOG          # backwards compat alias
-    SHEET_MESSAGE_QUEUE = SHEET_MSG_QUE        # backwards compat alias
-    SHEET_MESSAGE_LOG   = SHEET_MSG_LOG        # backwards compat alias
-    SHEET_LOGS          = SHEET_MSG_LOG        # backwards compat alias
+    SHEET_MESSAGE_QUEUE = "MessageQueue"       # original message queue
+    SHEET_MESSAGE_LOG   = "MessageLog"         # original message log
+    SHEET_LOGS          = "Logs"                # master activity log
     SHEET_MASTER_LOG    = SHEET_MSG_LOG        # backwards compat alias
-    SHEET_SCRAPE_STATE  = SHEET_MSG_LOG        # backwards compat alias
-    SHEET_DASHBOARD     = "Dashboard"         # retained name (not used by bot)
+    SHEET_SCRAPE_STATE  = "ScrapeState"        # state storage
+    SHEET_DASHBOARD     = "Dashboard"          # analysis sheet
 
     # ════════════════════════════════════════════════════════════════════════════
     #  COLUMN DEFINITIONS — single source of truth for every sheet

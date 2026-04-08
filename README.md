@@ -6,142 +6,130 @@ A streamlined Python bot for DamaDam.pk featuring unified message management: co
 
 ## Features
 
-- **Messages Mode**: Unified inbox + activity management with date-organized logging and reply sending
+- **Message Mode**: Send personalized messages to DamaDam users
+- **Inbox Sync Mode**: Synchronize inbox and activity feed to Google Sheets
+- **Google Sheets Integration**: Complete logging and queue management
+- **React-compatible**: Properly handles DamaDam's React-powered text areas
+- **Automated Scheduling**: GitHub Actions integration for regular runs
 
----
+## Requirements
 
-## Key Improvements in V4.1
+- Python 3.11+
+- Google Chrome browser
+- Google Cloud Service Account (for Sheets API)
+- DamaDam.pk account credentials
 
-- **Unified Message System**: Merged inbox and activity into single comprehensive mode
-- **Date-Organized Logging**: All messages organized by date for better tracking
-- **Person Record ID**: Unique identifiers for each person (TID_NICK format)
-- **Streamlined Sheets**: Reduced sheet count while maintaining full functionality
-- **Enhanced Performance**: Optimized for faster execution and cleaner data organization
-- **Simplified Interface**: Only 2 core modes for focused functionality
+## Setup
 
----
-
-## Quick Start (Local)
-
-### 1. Install dependencies
-
+### 1. Clone and Install Dependencies
 ```bash
+git clone https://github.com/net2t/DD-MsgBot.git
+cd DD-MsgBot
 pip install -r requirements.txt
 ```
 
-### 2. Google Sheets setup
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a project → Enable **Google Sheets API** and **Google Drive API**
-3. Create a **Service Account** → download key as `credentials.json`
-4. Share your Google Sheet with the service account email (Editor access)
+### 2. Google Sheets Setup
+1. Create a Google Cloud Service Account
+2. Enable Google Sheets API
+3. Download credentials JSON file
+4. Create a new Google Sheet
+5. Share the sheet with your service account email (Editor access)
+6. Add your Sheet ID to `.env`
 
-### 3. Create `.env`
-
-```bash
-cp .env.sample .env
-# Fill in your values
-```
-
-Minimum required:
-
+### 3. Environment Configuration
+Copy `.env.sample` to `.env` and fill in your credentials:
 ```env
-DD_LOGIN_EMAIL=your_damadam_username
+# DamaDam Credentials
+DD_LOGIN_EMAIL=your_username
 DD_LOGIN_PASS=your_password
-DD_SHEET_ID=your_google_sheet_id
+
+# Google Sheets
+DD_SHEET_ID=your_sheet_id_here
 CREDENTIALS_FILE=credentials.json
+
+# Browser Settings
+DD_HEADLESS=1
+DD_DISABLE_IMAGES=1
+
+# Performance
+DD_MSG_DELAY_SECONDS=3
+DD_MAX_POST_PAGES=10
 ```
 
-### 4. Create sheets
-
+### 4. Initial Setup
+Run the setup command to create all required sheets:
 ```bash
 python main.py setup
 ```
 
-### 5. Run (interactive menu)
+## Usage
 
+### Interactive Menu
 ```bash
 python main.py
 ```
 
-Running with no arguments shows a numbered menu — no flags needed.
-
----
-
-## CLI Usage (Direct / GitHub Actions)
-
+### Direct Commands
 ```bash
-python main.py <mode> [--max N] [--debug] [--headless]
+# Send messages (reads from MessageQueue sheet)
+python main.py msg --max 50
+
+# Sync inbox and activity (reads/writes MessageQueue sheet)
+python main.py messages --max 100
+
+# Create/refresh sheet structure
+python main.py setup
 ```
 
-| Argument | Description |
-|----------|--------------|
-| `mode` | One of: `messages setup` |
-| `--max N` | Process only N items (default: 0 = unlimited) |
-| `--debug` | Verbose debug output |
-| `--headless` | Force headless browser (auto-enabled in CI) |
-
-**Examples:**
-
-```bash
-python main.py messages             # Unified inbox + activity management + send replies
-python main.py setup                # Create/initialize sheets
-```
-
----
+### Options
+- `--max N` - Process only N items (0 = unlimited)
+- `--debug` - Enable verbose debug logging
+- `--headless` - Force headless browser mode
 
 ## Sheet Structure
 
-### MsgQue
+### Queue Sheets
+- **MessageQueue**: Target users and message content
+- **MsgQue**: Legacy message queue (backward compatible)
 
-Unified message queue (inbox sync + pending replies). Organized by person record ID.
+### Log Sheets
+- **MessageLog**: Message sending history
+- **MsgLog**: Legacy message log (backward compatible)
+- **Logs**: Master activity log
 
-| Column | Description |
-|--------|--------------|
-| RECORD_ID | Unique ID (TID_NICK or NOID_NICK) |
-| DATE | Date of conversation (YYYY-MM-DD) |
-| NICK | DamaDam username |
-| NAME | Display name |
-| TYPE | 1ON1 / POST / MEHFIL / UNKNOWN |
-| TID | DamaDam user ID |
-| LAST_MESSAGE | Last message received |
-| MY_REPLY | Your reply text — bot sends when STATUS=Pending |
-| STATUS | Pending → Done / Failed / NoReply |
-| UPDATED | Timestamp of last sync |
-| NOTES | Set by bot |
+### System Sheets
+- **ScrapeState**: Pagination and state storage
+- **Dashboard**: Analysis and metrics
 
-### MsgLog
+## GitHub Actions
 
-Unified message log (inbox events + activity + sent replies). Organized by date with complete history.
-
-| Column | Description |
-|--------|--------------|
-| DATE | Date of message (YYYY-MM-DD) - for sorting |
-| TIMESTAMP | PKT timestamp |
-| RECORD_ID | Person record ID (TID_NICK or NOID_NICK) |
-| NICK | Username |
-| TYPE | 1ON1 / POST / MEHFIL / ACTIVITY |
-| DIRECTION | IN / OUT / ACTIVITY |
-| MESSAGE | Message text or activity description |
-| CONV_URL | Link to conversation or post |
-| STATUS | Received / Sent / Failed / Logged |
-
----
+The bot includes automated workflows that:
+- Run every 30 minutes
+- Process up to 100 items per run
+- Send messages automatically
+- Upload logs on failure
 
 ## File Structure
 
 ```
-DD-Msg-Bot/
-├── main.py                  ← Entry point + interactive menu
-├── config.py                ← All settings (env vars + sheet/column definitions)
-├── requirements.txt
-├── .env                     ← Your credentials (gitignored)
-├── .env.sample              ← Template — copy to .env
-├── credentials.json         ← Google service account key (gitignored)
-├── core/
-│   ├── browser.py           ← Chrome setup
-│   ├── login.py             ← Cookie → primary → backup login chain
-│   └── sheets.py            ← All Google Sheets operations
-├── modes/
+DD-MsgBot/
+├── main.py              # Entry point and CLI interface
+├── config.py            # Configuration and constants
+├── requirements.txt     # Python dependencies
+├── .env.sample         # Environment template
+├── core/               # Core functionality
+│   ├── browser.py      # Chrome driver management
+│   ├── login.py        # DamaDam authentication
+│   └── sheets.py       # Google Sheets integration
+├── modes/              # Bot operation modes
+│   ├── message.py      # Message sending mode
+│   ├── messages.py     # Inbox sync mode
+│   └── setup.py        # Sheet setup mode
+├── utils/              # Utilities
+│   ├── helpers.py      # Helper functions
+│   └── logger.py       # Logging system
+└── .github/workflows/  # CI/CD automation
+    └── bot.yml         # Scheduled runs
 │   ├── messages.py          ← Unified Messages Mode (inbox + activity + replies)
 │   ├── message.py           ← Legacy message sending (kept for compatibility)
 │   └── setup.py             ← Sheet setup + formatting
