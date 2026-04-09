@@ -1,32 +1,19 @@
 """
-modes/message.py — DD-Msg-Bot V2
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Message Mode: Send pre-written messages to DamaDam users by posting
-on their public posts.
+modes/message.py — DD-Msg-Bot V5.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Message Mode: Send pre-written messages to DamaDam users.
 
-How it works:
-  1. Reads MsgQue sheet, finds all rows with STATUS = Pending
-  2. For each target nick:
-     a. Visit their public profile page
-     b. Find the first post that has an open reply/comment form
-     c. Type the message using send_keys (NOT JS .value — DamaDam textareas
-        are React-powered; setting .value silently does nothing on submit)
-     d. Submit the form
-     e. Verify the message appears in the post
-  3. Updates STATUS/NOTES/RESULT in the row
-  4. Appends to MsgLog and Logs sheets
-  5. Appends run summary to RunLog
-
-Root cause of empty posts (previous bug):
-  The old code used:
-      driver.execute_script("arguments[0].value = arguments[1]; ...", textarea, msg)
-  DamaDam's textarea is controlled by React. Setting .value via JS updates
-  the DOM property but does NOT fire React's internal synthetic event system.
-  When the form is submitted, React reads from its own state (which was never
-  updated) and sees an empty string.
-
-  Fix: Use JS focus() + clear() + Selenium's send_keys() which fires real
-  keyboard events that React observes.
+Key fixes in V5.0:
+  - Post selection: ONLY pick posts that have the REPLIES button visible
+    (a[itemprop='discussionUrl']). Never pick posts with replies off.
+  - 0 Posts check: read POSTS count from profile page before scanning.
+    If 0, skip immediately with note "0 Posts".
+  - "REPLIES OFF" text detection on post page → mark Skipped, note "Replies Off"
+  - "FOLLOW TO REPLY" → status=Skipped, note="Must Follow First"
+  - "Not Following" → status=Skipped, note="Must Follow First"
+  - No Form after checking → "No Reply Form"
+  - VLOOKUP cols (D,E,F,G) never written by bot.
+  - Log writes correct cols to MsgLog sheet.
 """
 
 import re
@@ -44,45 +31,47 @@ from utils.logger import Logger, pkt_stamp
 from utils.helpers import clean_post_url, is_valid_post_url, strip_non_bmp
 from core.sheets import SheetsManager
 
+from datetime import datetime, timezone, timedelta
+
+_PKT = timezone(timedelta(hours=5))
+
+def _today() -> str:
+    return datetime.now(tz=_PKT).strftime("%Y-%m-%d")
+
 
 # ── Selectors ─────────────────────────────────────────────────────────────────
-_SEL_POST_WITH_COMMENTS = "a[href*='/comments/'] button[itemprop='discussionUrl']"
-_SEL_REPLY_FORM         = "form[action*='direct-response/send']"
-_SEL_REPLY_TEXTAREA     = "textarea[name='direct_response']"
-_SEL_REPLY_SUBMIT       = "button[name='dec'][value='1'], button[type='submit']"
+# Only posts that have this element have replies open
+_SEL_REPLIES_LINK  = "a[itemprop='discussionUrl'][href*='/comments/']"
+_SEL_REPLY_FORM    = "form[action*='direct-response/send']"
+_SEL_REPLY_TA      = "textarea[name='direct_response']"
+_SEL_POST_COUNT    = "a[href*='/profile/public/'] button div"   # "0\nPOSTS"
 
 
 def run(driver, sheets: SheetsManager, logger: Logger,
         max_targets: int = 0) -> Dict:
-    """
-    Run Message Mode end-to-end.
-
-    Returns:
-        Stats dict: {done, skipped, failed, total}
-    """
-    import time as _time
-    run_start = _time.time()
+    """Run Message Mode end-to-end."""
+    import time as _t
+    run_start = _t.time()
 
     logger.section("MESSAGE MODE")
 
-    ws = sheets.get_worksheet(Config.SHEET_MESSAGE_QUEUE, headers=Config.MESSAGE_QUEUE_COLS)
+    ws = sheets.get_worksheet(Config.SHEET_MSG_QUE, headers=Config.MSG_QUE_COLS)
     if not ws:
-        logger.error("MessageQueue sheet not found")
+        logger.error("MsgQue sheet not found")
         return {}
 
     all_rows = sheets.read_all(ws)
     if len(all_rows) < 2:
-        logger.info("MessageQueue is empty — nothing to do")
+        logger.info("MsgQue is empty")
         return {"done": 0, "skipped": 0, "failed": 0, "total": 0}
 
     headers    = all_rows[0]
     header_map = SheetsManager.build_header_map(headers)
-
     header_len = len(headers)
 
     col_status   = sheets.get_col(headers, "STATUS")
     col_notes    = sheets.get_col(headers, "NOTES")
-    col_result   = sheets.get_col(headers, "RESULT", "RESULT_URL")
+    col_result   = sheets.get_col(headers, "RESULT")
     col_sent_msg = sheets.get_col(headers, "SENT_MSG")
 
     if not all([col_status, col_notes, col_result]):
@@ -92,37 +81,25 @@ def run(driver, sheets: SheetsManager, logger: Logger,
     def cell(row, *names):
         return SheetsManager.get_cell(row, header_map, *names)
 
-    def cell_by_col(row, col_1_based: Optional[int]) -> str:
-        if not col_1_based:
+    def cell_by_col(row, col_1based):
+        if not col_1based:
             return ""
-        idx = col_1_based - 1
-        if idx < 0:
-            return ""
-        if idx >= len(row):
-            return ""
-        return str(row[idx]).strip()
+        idx = col_1based - 1
+        return str(row[idx]).strip() if idx < len(row) else ""
 
     # ── Collect pending rows ──────────────────────────────────────────────────
     pending: List[Dict] = []
-    pending_status_rows = 0
-    missing_nick_rows = 0
-    missing_message_rows = 0
     for i, row in enumerate(all_rows[1:], start=2):
         if header_len and len(row) < header_len:
             row = row + [""] * (header_len - len(row))
-
-        status = cell_by_col(row, col_status).lower()
-        if not status.startswith("pending"):
+        if not cell_by_col(row, col_status).lower().startswith("pending"):
             continue
-        pending_status_rows += 1
-        nick = cell(row, "NICK", "NICK/URL")
+        nick = cell(row, "NICK")
         if not nick:
-            missing_nick_rows += 1
             continue
         message = cell(row, "MESSAGE")
         if not message:
-            logger.skip(f"Row {i} — no message, skipping")
-            missing_message_rows += 1
+            sheets.update_row_cells(ws, i, {col_status: "Skipped", col_notes: "No message text"})
             continue
         pending.append({
             "row": i, "nick": nick,
@@ -135,53 +112,33 @@ def run(driver, sheets: SheetsManager, logger: Logger,
         })
 
     if not pending:
-        try:
-            sample_statuses = []
-            for r in all_rows[1:21]:
-                if header_len and len(r) < header_len:
-                    r = r + [""] * (header_len - len(r))
-                s = cell_by_col(r, col_status)
-                if s:
-                    sample_statuses.append(s)
-            if sample_statuses:
-                logger.debug(f"MsgQue STATUS samples: {sample_statuses[:10]}")
-        except Exception:
-            pass
-        if pending_status_rows > 0:
-            logger.info(
-                "No actionable Pending rows in MsgQue "
-                f"(Pending={pending_status_rows}, MissingNick={missing_nick_rows}, MissingMessage={missing_message_rows})"
-            )
-        else:
-            logger.info("No Pending rows in MsgQue")
+        logger.info("No Pending rows in MsgQue")
         return {"done": 0, "skipped": 0, "failed": 0, "total": 0}
 
     if max_targets and max_targets > 0:
         pending = pending[:max_targets]
 
     logger.info(f"Found {len(pending)} Pending targets")
-
     stats = {"done": 0, "skipped": 0, "failed": 0, "total": len(pending)}
 
     for idx, target in enumerate(pending, start=1):
         nick    = target["nick"]
         row_num = target["row"]
-        logger.info(f"[{idx}/{len(pending)}] Processing: {nick}")
+        logger.info(f"[{idx}/{len(pending)}] {nick}")
 
-        # -- Find an open post ------------------------------------------------
-        post_url, skip_reason = _find_open_post(driver, nick, logger)
+        post_url, reason = _find_open_post(driver, nick, logger)
 
         if not post_url:
-            logger.skip(f"{nick} — no open posts found")
+            note = reason or "No open posts"
+            logger.skip(f"{nick} — {note}")
             sheets.update_row_cells(ws, row_num, {
                 col_status: "Skipped",
-                col_notes:  (skip_reason or "No open posts"),
+                col_notes:  note,
             })
-            sheets.log_action("MSG", "skip", nick, "", "Skipped", (skip_reason or "No open posts"))
+            _write_msg_log(sheets, nick, target["name"], "", "", "Skipped", note)
             stats["skipped"] += 1
             continue
 
-        # -- Process template -------------------------------------------------
         profile_data = {
             "NAME": target["name"], "NICK": nick,
             "CITY": target["city"], "POSTS": target["posts"],
@@ -189,69 +146,61 @@ def run(driver, sheets: SheetsManager, logger: Logger,
         }
         message_text = _process_template(target["message"], profile_data)
 
-        # -- Send the message -------------------------------------------------
         result = _send_message(driver, post_url, message_text, nick, logger)
+        status  = result["status"]
+        res_url = result.get("url", post_url)
 
-        if result["status"] == "Posted":
-            logger.ok(f"Message sent to {nick} at {result['url']}")
-            row_updates = {
+        if status == "Posted":
+            logger.ok(f"Sent to {nick} → {res_url}")
+            updates = {
                 col_status: "Done",
-                col_notes:  f"Posted @ {pkt_stamp()}",
-                col_result: result["url"],
+                col_notes:  f"Sent @ {pkt_stamp()}",
+                col_result: res_url,
             }
             if col_sent_msg:
-                row_updates[col_sent_msg] = message_text
-            sheets.update_row_cells(ws, row_num, row_updates)
-            _write_msg_log(sheets, nick, target["name"], message_text,
-                           result["url"], "Sent", "")
-            sheets.log_action("MSG", "sent", nick, result["url"], "Done")
+                updates[col_sent_msg] = message_text
+            sheets.update_row_cells(ws, row_num, updates)
+            _write_msg_log(sheets, nick, target["name"], message_text, res_url, "Sent", "")
             stats["done"] += 1
 
-        elif result["status"] == "Not Following":
-            logger.skip(f"{nick} — must follow first")
+        elif status in ("Not Following", "Must Follow First"):
+            note = "Must Follow First"
+            logger.skip(f"{nick} — {note}")
             sheets.update_row_cells(ws, row_num, {
-                col_status: "Failed",
-                col_notes:  "Not Following",
-                col_result: result["url"],
+                col_status: "Skipped",
+                col_notes:  note,
+                col_result: res_url,
             })
-            _write_msg_log(sheets, nick, target["name"], message_text,
-                           result["url"], "Failed", "Not Following")
-            sheets.log_action("MSG", "failed", nick, result["url"], "Failed", "Not Following")
-            stats["failed"] += 1
+            _write_msg_log(sheets, nick, target["name"], message_text, res_url, "Skipped", note)
+            stats["skipped"] += 1
 
-        elif result["status"] == "Comments Closed":
-            logger.skip(f"{nick} — comments closed")
+        elif status == "Replies Off":
+            note = "Replies Off"
+            logger.skip(f"{nick} — {note}")
             sheets.update_row_cells(ws, row_num, {
-                col_status: "Failed",
-                col_notes:  "Comments Closed",
-                col_result: result["url"],
+                col_status: "Skipped",
+                col_notes:  note,
+                col_result: res_url,
             })
-            stats["failed"] += 1
+            _write_msg_log(sheets, nick, target["name"], message_text, res_url, "Skipped", note)
+            stats["skipped"] += 1
 
         else:
-            logger.warning(f"{nick} — {result['status']}")
+            # Any other error
+            logger.warning(f"{nick} — {status}")
             sheets.update_row_cells(ws, row_num, {
                 col_status: "Failed",
-                col_notes:  result["status"][:80],
-                col_result: result.get("url", ""),
+                col_notes:  status[:80],
+                col_result: res_url,
             })
-            _write_msg_log(sheets, nick, target["name"], message_text,
-                           result.get("url", ""), "Failed", result["status"][:80])
-            sheets.log_action("MSG", "failed", nick, result.get("url", ""), "Failed", result["status"])
+            _write_msg_log(sheets, nick, target["name"], message_text, res_url, "Failed", status[:80])
             stats["failed"] += 1
 
         time.sleep(Config.MSG_DELAY_SECONDS)
 
-    duration = _time.time() - run_start
+    duration = _t.time() - run_start
     logger.section(
-        f"MESSAGE MODE DONE — Done:{stats['done']}  "
-        f"Skipped:{stats['skipped']}  Failed:{stats['failed']}"
-    )
-    sheets.log_run(
-        "msg",
-        {"sent": stats["done"], "failed": stats["failed"], "skipped": stats["skipped"]},
-        duration_s=duration,
-        notes=f"{stats['done']}/{stats['total']} messages sent",
+        f"DONE — Done:{stats['done']}  Skipped:{stats['skipped']}  Failed:{stats['failed']}"
     )
     return stats
 
@@ -262,101 +211,82 @@ def run(driver, sheets: SheetsManager, logger: Logger,
 
 def _find_open_post(driver, nick_or_url: str, logger: Logger) -> Tuple[Optional[str], Optional[str]]:
     """
-    Find an open/commentable post based on input type:
-    
-    1. If nickname/username: Visit profile → find posts → check which allow messaging
-    2. If post URL: Directly open the post URL → check if message box is available
-    
-    Returns:
-        (clean_post_url, None) on success
-        (None, reason) on failure
+    Find a post that has replies open.
+
+    Strategy:
+    1. If input is a direct post URL → verify it directly.
+    2. If input is a nick/profile URL:
+       a. Visit profile page 1
+       b. Check POSTS count — if 0, return (None, "0 Posts")
+       c. Collect all <a itemprop='discussionUrl'> links on profile
+          These are the ONLY posts with replies open (DamaDam only renders
+          that button when replies are enabled).
+       d. For each candidate, visit post and verify reply form present.
     """
-    raw_input = str(nick_or_url).strip()
-    
-    # Check if input is a post URL (not profile URL)
-    if ("http" in raw_input.lower() and "damadam.pk" in raw_input.lower() and 
-        "/comments/" in raw_input.lower()):
-        # This is a post URL - directly check if it's open for messaging
-        logger.debug(f"Direct post URL detected: {raw_input}")
-        clean_url = clean_post_url(raw_input)
-        if is_valid_post_url(clean_url):
-            is_open, reason = _verify_post_open(driver, clean_url, logger)
-            if is_open:
-                logger.debug(f"Direct post URL is open: {clean_url}")
-                return clean_url, None
-            else:
-                logger.debug(f"Direct post URL is not open for messaging: {clean_url}")
-                return None, reason
-        else:
-            logger.debug(f"Invalid post URL format: {raw_input}")
-            return None, "Invalid post URL"
-    
-    # Handle nickname or profile URL
-    nick = raw_input
-    # If the sheet contains a full profile URL, extract the nick part.
-    # Supports common patterns like:
-    #   https://damadam.pk/profile/public/<nick>/
-    #   https://damadam.pk/profile/<nick>/
-    if "http" in raw_input.lower() and "damadam.pk" in raw_input.lower():
-        m = re.search(r"/profile/(?:public/)?([^/]+)/?", raw_input, flags=re.I)
+    raw = str(nick_or_url).strip()
+
+    # Direct post URL
+    if "damadam.pk" in raw and "/comments/" in raw:
+        clean = clean_post_url(raw)
+        if is_valid_post_url(clean):
+            ok, reason = _verify_post_has_form(driver, clean, logger)
+            return (clean, None) if ok else (None, reason)
+        return None, "Invalid URL"
+
+    # Extract nick from profile URL if needed
+    nick = raw
+    if "damadam.pk" in raw:
+        m = re.search(r"/profile/(?:public/)?([^/?#]+)", raw, re.I)
         if m:
             nick = m.group(1).strip()
 
     safe_nick = quote(nick, safe="+")
     max_pages  = max(1, Config.MAX_POST_PAGES)
-
     last_reason: Optional[str] = None
 
     for page_num in range(1, max_pages + 1):
         url = f"{Config.BASE_URL}/profile/public/{safe_nick}/?page={page_num}"
         try:
-            logger.debug(f"Checking profile page {page_num}: {url}")
+            logger.debug(f"Profile page {page_num}: {url}")
             driver.get(url)
             time.sleep(2)
 
-            # Strategy 1: discussionUrl button (most reliable — only on open posts)
-            links = driver.find_elements(
-                By.CSS_SELECTOR,
-                "a[href*='/comments/'] button[itemprop='discussionUrl']"
-            )
-            for btn in links:
-                try:
-                    parent_a = btn.find_element(By.XPATH, "..")
-                    href = parent_a.get_attribute("href") or ""
-                    if href and "/comments/" in href:
-                        clean = clean_post_url(href)
-                        if is_valid_post_url(clean):
-                            logger.debug(f"Found open post: {clean}")
-                            return clean, None
-                except Exception:
-                    continue
+            # ── Check post count on page 1 ────────────────────────────────────
+            if page_num == 1:
+                posts_count = _get_profile_post_count(driver)
+                if posts_count == 0:
+                    logger.debug(f"{nick} has 0 posts")
+                    return None, "0 Posts"
 
-            # Strategy 2: Collect ALL /comments/ hrefs from this profile page
-            # without navigating away — then verify each one.
-            candidate_urls = []
-            direct_links = driver.find_elements(By.CSS_SELECTOR, "a[href]")
-            for link in direct_links:
-                href = (link.get_attribute("href") or "").strip()
+            # ── Collect posts that have the REPLIES button ─────────────────────
+            # DamaDam only renders a[itemprop='discussionUrl'] when replies are open.
+            # This is the most reliable selector — no need to visit each post.
+            reply_links = driver.find_elements(By.CSS_SELECTOR, _SEL_REPLIES_LINK)
+
+            open_post_urls = []
+            for a in reply_links:
+                href = (a.get_attribute("href") or "").strip()
                 if not href:
                     continue
-                # DamaDam can use multiple URL patterns for posts; accept any link
-                # that looks like a post and normalize it.
-                if any(p in href for p in ("/comments/", "/content/")):
-                    clean = clean_post_url(href)
-                    if is_valid_post_url(clean) and clean not in candidate_urls:
-                        candidate_urls.append(clean)
+                clean = clean_post_url(href)
+                if is_valid_post_url(clean) and clean not in open_post_urls:
+                    open_post_urls.append(clean)
 
-            for candidate in candidate_urls[:3]:  # Check up to 3 candidates
-                is_open, reason = _verify_post_open(driver, candidate, logger)
-                if is_open:
+            logger.debug(f"Page {page_num}: found {len(open_post_urls)} posts with replies open")
+
+            # Try each candidate — pick the first with an actual reply form
+            for candidate in open_post_urls:
+                ok, reason = _verify_post_has_form(driver, candidate, logger)
+                if ok:
+                    logger.debug(f"Using post: {candidate}")
                     return candidate, None
                 if reason:
                     last_reason = last_reason or reason
 
-            # Check for next page
+            # Check next page
             try:
-                next_link = driver.find_element(By.CSS_SELECTOR, "a[rel='next']")
-                if not next_link.get_attribute("href"):
+                nxt = driver.find_element(By.CSS_SELECTOR, "a[rel='next']")
+                if not nxt.get_attribute("href"):
                     break
             except NoSuchElementException:
                 break
@@ -365,30 +295,69 @@ def _find_open_post(driver, nick_or_url: str, logger: Logger) -> Tuple[Optional[
             logger.debug(f"Profile page {page_num} error: {e}")
             break
 
-    logger.debug(f"No open posts found for {nick_or_url}")
-    return None, last_reason
+    return None, last_reason or "No posts with replies open"
 
 
-def _verify_post_open(driver, post_url: str, logger: Logger) -> tuple[bool, Optional[str]]:
-    """Navigate to a post and check if the reply form is present and open."""
+def _get_profile_post_count(driver) -> int:
+    """
+    Read the POSTS count from the profile page.
+    Looks for the button that shows post count (e.g. "0\nPOSTS").
+    Returns 0 if not found (safe default — will not skip if we can't read it).
+    """
+    try:
+        # The posts button HTML is:
+        # <button ...><div>0</div><div class="mt" style="...">POSTS</div></button>
+        buttons = driver.find_elements(By.CSS_SELECTOR, "a[href*='/profile/public/'] button")
+        for btn in buttons:
+            text = (btn.text or "").strip().upper()
+            if "POSTS" in text:
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                for line in lines:
+                    if line.isdigit():
+                        return int(line)
+        # Fallback: look for any button containing "POSTS" text on the page
+        all_btns = driver.find_elements(By.CSS_SELECTOR, "button")
+        for btn in all_btns:
+            text = (btn.text or "").strip().upper()
+            if "POSTS" in text:
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                for line in lines:
+                    if line.isdigit():
+                        return int(line)
+    except Exception:
+        pass
+    return -1  # -1 = unknown, don't skip
+
+
+def _verify_post_has_form(driver, post_url: str, logger: Logger) -> Tuple[bool, Optional[str]]:
+    """
+    Navigate to post_url and confirm the reply form + textarea are present.
+    Also checks for "REPLIES OFF" and "FOLLOW TO REPLY" conditions.
+    """
     try:
         driver.get(post_url)
         time.sleep(2)
-        page = driver.page_source.lower()
-        if "comments are closed" in page or "comments closed" in page:
-            return False, "Comments Closed"
-        if "follow to reply" in page:
-            return False, "Follow required"
+        page = driver.page_source
+
+        page_upper = page.upper()
+        if "REPLIES OFF" in page_upper or "REPLIES ARE OFF" in page_upper:
+            return False, "Replies Off"
+        if "COMMENTS ARE CLOSED" in page_upper or "COMMENTS CLOSED" in page_upper:
+            return False, "Replies Off"
+        if "FOLLOW TO REPLY" in page_upper or "FOLLOW TO COMMENT" in page_upper:
+            return False, "Must Follow First"
+
         forms = driver.find_elements(By.CSS_SELECTOR, _SEL_REPLY_FORM)
         for f in forms:
             try:
-                f.find_element(By.CSS_SELECTOR, _SEL_REPLY_TEXTAREA)
+                f.find_element(By.CSS_SELECTOR, _SEL_REPLY_TA)
                 return True, None
             except Exception:
                 continue
-        return False, "No Form"
-    except Exception:
-        return False, "Error"
+
+        return False, "No Reply Form"
+    except Exception as e:
+        return False, f"Error: {str(e)[:40]}"
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -398,102 +367,67 @@ def _verify_post_open(driver, post_url: str, logger: Logger) -> tuple[bool, Opti
 def _send_message(driver, post_url: str, message: str,
                   nick: str = "", logger: Logger = None) -> Dict:
     """
-    Navigate to post_url, type the message using send_keys, and submit.
-
-    KEY FIX: DamaDam textareas are React-controlled. Using JS .value setter
-    updates the DOM but NOT React's internal state — the form submits empty.
-    We must use actual keyboard events via send_keys() so React sees the input.
-
-    Returns:
-        {"status": "Posted" | "Not Following" | "Comments Closed" | "No Form" | "Error: ...",
-         "url":    post URL}
+    Type and submit a reply on the given post.
+    Uses send_keys (not JS .value) so React state is properly updated.
     """
     if Config.DRY_RUN:
-        if logger:
-            logger.info(f"DRY RUN — would send message to {post_url}")
+        logger and logger.info(f"DRY RUN — would send to {post_url}")
         return {"status": "Posted", "url": post_url}
 
     try:
-        logger.debug(f"Opening post: {post_url}")
+        logger and logger.debug(f"Opening post: {post_url}")
         driver.get(post_url)
         time.sleep(3)
 
         page = driver.page_source
+        page_upper = page.upper()
 
-        # Pre-flight checks
-        if "FOLLOW TO REPLY" in page.upper():
-            return {"status": "Not Following", "url": post_url}
-        if "comments are closed" in page.lower() or "comments closed" in page.lower():
-            return {"status": "Comments Closed", "url": post_url}
+        if "FOLLOW TO REPLY" in page_upper or "FOLLOW TO COMMENT" in page_upper:
+            return {"status": "Must Follow First", "url": post_url}
+        if "REPLIES OFF" in page_upper or "COMMENTS ARE CLOSED" in page_upper:
+            return {"status": "Replies Off", "url": post_url}
 
-        # Find reply form + textarea
         forms    = driver.find_elements(By.CSS_SELECTOR, _SEL_REPLY_FORM)
         form     = None
         textarea = None
         for f in forms:
             try:
-                ta   = f.find_element(By.CSS_SELECTOR, _SEL_REPLY_TEXTAREA)
-                if not ta.is_displayed() or not ta.is_enabled():
-                    continue
-                form = f
-                textarea = ta
-                break
+                ta = f.find_element(By.CSS_SELECTOR, _SEL_REPLY_TA)
+                if ta.is_displayed() and ta.is_enabled():
+                    form     = f
+                    textarea = ta
+                    break
             except Exception:
                 continue
 
         if not form or not textarea:
-            return {"status": "No Form", "url": post_url}
+            return {"status": "No Reply Form", "url": post_url}
 
         # Find submit button
         submit_btn = None
-        for sel in (
-            "button[name='dec'][value='1']",
-            "button[type='submit'][name='dec']",
-            "button[type='submit']",
-            "input[type='submit']",
-        ):
-            try:
-                btns = form.find_elements(By.CSS_SELECTOR, sel)
-                if btns:
-                    for b in btns:
-                        try:
-                            if b.is_displayed() and b.is_enabled():
-                                submit_btn = b
-                                break
-                        except Exception:
-                            continue
-                    if submit_btn:
+        for sel in ("button[name='dec'][value='1']", "button[type='submit']", "input[type='submit']"):
+            btns = form.find_elements(By.CSS_SELECTOR, sel)
+            for b in btns:
+                try:
+                    if b.is_displayed() and b.is_enabled():
+                        submit_btn = b
                         break
-            except Exception:
-                pass
+                except Exception:
+                    continue
+            if submit_btn:
+                break
 
         if not submit_btn:
             return {"status": "No Submit Button", "url": post_url}
 
-        # Sanitize message (max 350 chars, strip non-BMP chars)
-        safe_msg = strip_non_bmp(message)
-        if len(safe_msg) > 350:
-            safe_msg = safe_msg[:350]
+        safe_msg = strip_non_bmp(message)[:350]
 
-        # ── TYPE MESSAGE (THE FIX) ───────────────────────────────────────────
-        # Step 1: Scroll textarea into view and give it JS focus + clear
+        # Scroll + focus + clear + send_keys (React-safe)
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", textarea)
         time.sleep(0.2)
-        try:
-            WebDriverWait(driver, 8).until(lambda d: textarea.is_displayed() and textarea.is_enabled())
-        except Exception:
-            pass
-        try:
-            driver.execute_script("arguments[0].focus();", textarea)
-        except Exception:
-            pass
-        try:
-            driver.execute_script("arguments[0].click();", textarea)
-        except Exception:
-            pass
+        driver.execute_script("arguments[0].focus();", textarea)
+        driver.execute_script("arguments[0].click();", textarea)
         time.sleep(0.3)
-
-        # Step 2: clear() via Selenium then send_keys() — fires React keyboard events
         try:
             textarea.clear()
         except Exception:
@@ -507,73 +441,53 @@ def _send_message(driver, post_url: str, message: str,
                 driver.execute_script("arguments[0].focus();", textarea)
                 textarea.send_keys(safe_msg)
             except Exception as e:
-                return {"status": f"Error: {str(e)[:50]}", "url": post_url}
+                return {"status": f"Type Error: {str(e)[:40]}", "url": post_url}
         time.sleep(0.5)
 
-        # Step 3: Verify the textarea actually contains the message
-        actual_val = ""
-        try:
-            actual_val = driver.execute_script("return arguments[0].value;", textarea) or ""
-        except Exception:
-            pass
-
-        if not actual_val.strip():
-            # Fallback: try JS value assignment + dispatching React synthetic events
-            logger.debug("send_keys didn't populate textarea — trying React event dispatch")
+        # If send_keys didn't register (React textarea), use native value setter
+        actual = driver.execute_script("return arguments[0].value;", textarea) or ""
+        if not actual.strip():
+            logger and logger.debug("send_keys missed — using React native setter")
             driver.execute_script(
                 """
                 var el = arguments[0];
-                var nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                var setter = Object.getOwnPropertyDescriptor(
                     window.HTMLTextAreaElement.prototype, 'value').set;
-                nativeInputValueSetter.call(el, arguments[1]);
-                el.dispatchEvent(new Event('input',  {bubbles: true}));
-                el.dispatchEvent(new Event('change', {bubbles: true}));
+                setter.call(el, arguments[1]);
+                el.dispatchEvent(new Event('input',  {bubbles:true}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
                 """,
                 textarea, safe_msg
             )
             time.sleep(0.3)
 
-        # Step 4: Scroll submit into view and click
+        # Submit
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", submit_btn)
-        time.sleep(0.3)
-        logger.debug("Submitting reply...")
+        time.sleep(0.2)
         driver.execute_script("arguments[0].click();", submit_btn)
         time.sleep(4)
 
-        # ── VERIFY SUCCESS ───────────────────────────────────────────────────
+        # Verify
         driver.get(post_url)
         time.sleep(2)
         fresh = driver.page_source
-
-        our_nick     = Config.DD_NICK
-        nick_in_page = our_nick.lower() in fresh.lower()
-        msg_in_page  = safe_msg[:30].lower() in fresh.lower()
-        recent       = any(t in fresh.lower() for t in ["sec ago", "secs ago", "just now", "ابھی"])
-
-        if nick_in_page and (msg_in_page or recent):
-            return {"status": "Posted", "url": clean_post_url(driver.current_url)}
-        elif nick_in_page:
-            # Nick visible — probably posted but message text was truncated differently
-            return {"status": "Posted", "url": clean_post_url(driver.current_url)}
-        else:
-            logger.warning(f"Could not verify message for {nick} — may be posted or failed")
-            # Return "Posted" anyway — don't mark as Failed on unconfirmed sends
-            # The user can check the RESULT URL manually
+        our_nick = Config.DD_NICK.lower()
+        if our_nick in fresh.lower():
             return {"status": "Posted", "url": clean_post_url(driver.current_url)}
 
-    except NoSuchElementException as e:
-        return {"status": f"Form Error: {str(e)[:40]}", "url": post_url}
+        # Can't verify but don't fail — user can check RESULT url
+        logger and logger.warning(f"Could not verify post for {nick} — assuming sent")
+        return {"status": "Posted", "url": clean_post_url(driver.current_url)}
+
     except Exception as e:
         return {"status": f"Error: {str(e)[:50]}", "url": post_url}
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  TEMPLATE PROCESSOR
+#  TEMPLATE + LOG
 # ════════════════════════════════════════════════════════════════════════════════
 
 def _process_template(template: str, profile: Dict) -> str:
-    """Replace {{placeholders}} with actual profile data."""
-    msg = template
     name_val = (profile.get("NAME") or "").strip() or (profile.get("NICK") or "").strip()
     replacements = {
         "{{name}}":      name_val,
@@ -583,9 +497,9 @@ def _process_template(template: str, profile: Dict) -> str:
         "{{followers}}": str(profile.get("FOLLOWERS") or "").strip(),
         "{{gender}}":    (profile.get("GENDER") or "").strip(),
     }
-    for placeholder, value in replacements.items():
-        msg = msg.replace(placeholder, value)
-
+    msg = template
+    for ph, val in replacements.items():
+        msg = msg.replace(ph, val)
     msg = re.sub(r"(?i)(?:,\s*)?no\s*city\b", "", msg)
     msg = re.sub(r"\{\{[^}]+\}\}", "", msg)
     msg = re.sub(r"\s{2,}", " ", msg)
@@ -594,16 +508,19 @@ def _process_template(template: str, profile: Dict) -> str:
     return msg.strip()
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-#  MSG LOG WRITER
-# ════════════════════════════════════════════════════════════════════════════════
-
 def _write_msg_log(sheets: SheetsManager, nick: str, name: str,
                    message: str, post_url: str, status: str, notes: str):
-    """Append one row to MessageLog sheet."""
-    ws = sheets.get_worksheet(Config.SHEET_MESSAGE_LOG, headers=Config.MESSAGE_LOG_COLS)
+    """Append one row to MsgLog."""
+    ws = sheets.get_worksheet(Config.SHEET_MSG_LOG, headers=Config.MSG_LOG_COLS)
     if not ws:
         return
     sheets.append_row(ws, [
-        pkt_stamp(), nick, name, message, post_url, status, notes,
+        _today(),     # DATE
+        pkt_stamp(),  # TIMESTAMP
+        nick,         # NICK
+        name,         # NAME
+        post_url,     # POST_URL
+        status,       # STATUS
+        notes,        # NOTES
+        message,      # MESSAGE
     ])

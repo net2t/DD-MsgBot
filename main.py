@@ -1,27 +1,21 @@
 """
-main.py — DD-Msg-Bot V4.1 - Unified Message Version
-━━━━━━━━━━━━━━━━━━━━━━━
-Entry point for 3 core bot modes.
+main.py — DD-Msg-Bot V5.0
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Entry point. Clean 3-option menu.
 
-CLI usage (GitHub Actions / direct):
-    python main.py msg            → Message Mode
-    python main.py messages       → Unified Message Mode (inbox + activity)
+  1. Send Messages  → reads MsgQue, sends to targets
+  2. Inbox Sync     → syncs inbox + activity, sends pending replies
+  3. Setup Sheets   → creates/recreates the 4-sheet structure
+  0. Exit
 
-Options:
-    --max N    Process only N items (0 = unlimited)
-    --debug    Verbose debug logging
-    --headless Force headless browser
-
-Local interactive menu:
-    python main.py
-    (no arguments — shows a numbered menu)
+CLI (GitHub Actions):
+  python main.py msg      → Message Mode
+  python main.py inbox    → Inbox Mode
+  python main.py setup    → Setup Sheets
 """
 
 import sys
-import os
 import argparse
-import signal
-import threading
 
 from config import Config
 from utils.logger import Logger
@@ -29,104 +23,54 @@ from core.browser import BrowserManager
 from core.login import LoginManager
 from core.sheets import SheetsManager
 
-import modes.messages  as messages_mode
-import modes.message   as message_mode
+import modes.message as message_mode
+import modes.inbox   as inbox_mode
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  CLI Argument Parser
+#  CLI
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _build_parser() -> argparse.ArgumentParser:
-    """Define all CLI arguments."""
+def _build_parser():
     p = argparse.ArgumentParser(
         prog="main.py",
-        description=f"DD-Msg-Bot V{Config.VERSION} — DamaDam automation bot",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=f"DD-Msg-Bot V{Config.VERSION} — DamaDam.pk automation",
     )
-    p.add_argument(
-        "mode", nargs="?",
-        choices=["msg", "messages", "setup"],
-        help="Mode to run (omit for interactive menu): msg=send messages, messages=unified inbox+activity, setup=create sheets",
-    )
-    p.add_argument(
-        "--max", dest="max_items", type=int, default=0, metavar="N",
-        help="Maximum items to process (0 = unlimited)",
-    )
-    p.add_argument(
-        "--debug", dest="debug", action="store_true",
-        help="Enable verbose debug logging",
-    )
-    p.add_argument(
-        "--headless", dest="headless", action="store_true", default=None,
-        help="Force headless browser mode",
-    )
-    p.add_argument(
-        "--stop-on-fail", dest="stop_on_fail", action="store_true",
-        help="Stop the run immediately after the first Failed/RateLimited post",
-    )
-    p.add_argument(
-        "--force-wait", dest="force_wait", type=int, metavar="SECONDS",
-        help="Force wait N seconds before starting (useful to bypass cooldowns)",
-    )
+    p.add_argument("mode", nargs="?",
+                   choices=["msg", "inbox", "setup"],
+                   help="Mode to run (omit for interactive menu)")
+    p.add_argument("--max",      dest="max_items", type=int, default=0,
+                   metavar="N", help="Max items to process (0=unlimited)")
+    p.add_argument("--debug",    action="store_true", help="Verbose debug logging")
+    p.add_argument("--headless", action="store_true", default=None,
+                   help="Force headless browser")
     return p
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Signal Handling for Graceful Stopping
+#  Interactive Menu
 # ═══════════════════════════════════════════════════════════════════════════════
 
-shutdown_requested = False
-
-def signal_handler(signum, frame):
-    """Handle Ctrl+C gracefully."""
-    global shutdown_requested
-    shutdown_requested = True
-    print("\n\n⚠️  Stop requested! Finishing current task...")
-    print("   Press Ctrl+C again to force quit immediately")
-
-def check_shutdown():
-    """Check if shutdown was requested."""
-    global shutdown_requested
-    return shutdown_requested
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Interactive Local Menu
-# ═══════════════════════════════════════════════════════════════════════════════
-
-_MENU = """
-╔══════════════════════════════════════════════════════════╗
-║           DD-Msg-Bot V4.1.0  —  DamaDam.pk Bot           ║
-╠══════════════════════════════════════════════════════════╣
-║                                                          ║
-║   1.  Send Messages (Message Mode)                       ║
-║   2.  Sync Messages (Inbox + Activity Mode)             ║
-║   3.  Setup (Create/Refresh Sheets)                     ║
-║                                                          ║
-║   0.  Exit                                               ║
-╚══════════════════════════════════════════════════════════╝
+_MENU = r"""
+  ╔══════════════════════════════════════════════╗
+  ║      DD-Msg-Bot V5.0  —  DamaDam.pk         ║
+  ╠══════════════════════════════════════════════╣
+  ║                                              ║
+  ║   1.  Send Messages  (MsgQue targets)        ║
+  ║   2.  Inbox Sync     (Inbox + Activity)      ║
+  ║   3.  Setup Sheets   (Create / Recreate)     ║
+  ║                                              ║
+  ║   0.  Exit                                   ║
+  ╚══════════════════════════════════════════════╝
 """
 
-def _interactive_menu() -> tuple:
-    """
-    Show the welcome menu in the terminal and return (mode, max_items, debug).
-    Loops until the user makes a valid choice.
-    """
-    print(_MENU.format(ver=Config.VERSION))
-
-    # Ask for max_items once (after mode selection)
+def _menu() -> tuple:
+    print(_MENU)
     while True:
-        raw = input("  Enter choice: ").strip()
-
-        mode_map = {
-            "1": "msg",
-            "2": "messages", 
-            "3": "setup",
-            "0": None,
-        }
-
+        raw = input("  Choice: ").strip()
+        mode_map = {"1": "msg", "2": "inbox", "3": "setup", "0": None}
         if raw not in mode_map:
-            print("  ⚠  Invalid choice — enter 1, 2, 3, or 0 to exit.\n")
+            print("  Enter 1, 2, 3, or 0.\n")
             continue
 
         mode = mode_map[raw]
@@ -134,26 +78,20 @@ def _interactive_menu() -> tuple:
             print("  Goodbye!\n")
             sys.exit(0)
 
-        # Ask for a limit for all modes
         max_items = 0
-        limit_raw = input(
-            f"Max items to process? (Enter for unlimited, 0=unlimited): "
-        ).strip()
-        if limit_raw.isdigit():
-            max_items = int(limit_raw)
+        if mode in ("msg",):
+            lim = input("  Max items (Enter = unlimited): ").strip()
+            if lim.isdigit():
+                max_items = int(lim)
 
-        return mode, max_items, False
+        return mode, max_items
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Mode Runners
+#  Runners
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _run_with_browser(mode: str, args) -> None:
-    """
-    Shared runner for modes that need a browser.
-    Starts Chrome, logs in, connects to Sheets, runs the mode.
-    """
+def _run_with_browser(mode: str, max_n: int) -> None:
     logger = Logger(mode)
     logger.section(f"DD-Msg-Bot V{Config.VERSION} — {mode.upper()} MODE")
     Config.validate()
@@ -161,31 +99,39 @@ def _run_with_browser(mode: str, args) -> None:
     bm     = BrowserManager(logger)
     driver = bm.start()
     if not driver:
-        logger.error("Browser failed to start — aborting")
+        logger.error("Browser failed to start")
         sys.exit(1)
 
     try:
         lm = LoginManager(driver, logger)
         if not lm.login():
-            logger.error("Login failed — aborting")
+            logger.error("Login failed")
             sys.exit(1)
 
         sheets = SheetsManager(logger)
         if not sheets.connect():
-            logger.error("Google Sheets connection failed — aborting")
+            logger.error("Google Sheets connection failed")
             sys.exit(1)
 
-        max_n = getattr(args, "max_items", 0)
-
         if mode == "msg":
-            message_mode.run(driver, sheets, logger, max_n)
-        elif mode == "messages":
-            messages_mode.run_messages(driver, sheets, logger)
+            message_mode.run(driver, sheets, logger, max_targets=max_n)
+        elif mode == "inbox":
+            inbox_mode.run(driver, sheets, logger)
 
     finally:
         bm.close()
 
 
+def _run_setup() -> None:
+    from modes.setup import run as setup_run
+    logger = Logger("setup")
+    logger.section("SETUP MODE")
+    Config.validate()
+    sheets = SheetsManager(logger)
+    if not sheets.connect():
+        logger.error("Google Sheets connection failed")
+        sys.exit(1)
+    setup_run(sheets, logger)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -193,13 +139,9 @@ def _run_with_browser(mode: str, args) -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    # Register signal handler for graceful Ctrl+C
-    signal.signal(signal.SIGINT, signal_handler)
-    
     parser = _build_parser()
     args   = parser.parse_args()
 
-    # Apply CLI overrides to Config
     if getattr(args, "debug", False):
         Config.DEBUG = True
     if getattr(args, "headless", None):
@@ -207,29 +149,18 @@ def main():
 
     mode = args.mode
 
-    # ── No mode given and NOT in CI → show interactive menu ──────────────────
     if not mode:
         if Config.IS_CI:
-            parser.error("mode is required when running in CI / GitHub Actions")
-        mode, max_n, debug = _interactive_menu()
-        # Patch args so downstream functions see the menu choices
+            parser.error("mode required in CI (msg | inbox | setup)")
+        mode, max_n = _menu()
         args.max_items = max_n
-        if debug:
-            Config.DEBUG = True
 
-    # ── Dispatch ─────────────────────────────────────────────────────────────
+    max_n = getattr(args, "max_items", 0)
+
     if mode == "setup":
-        from modes.setup import run
-        logger = Logger("setup")
-        logger.section("SETUP MODE")
-        Config.validate()
-        sheets = SheetsManager(logger)
-        if not sheets.connect():
-            logger.error("Google Sheets connection failed — aborting")
-            sys.exit(1)
-        run(sheets, logger)
-    elif mode in ("msg", "messages"):
-        _run_with_browser(mode, args)
+        _run_setup()
+    elif mode in ("msg", "inbox"):
+        _run_with_browser(mode, max_n)
     else:
         parser.error(f"Unknown mode: {mode}")
 
