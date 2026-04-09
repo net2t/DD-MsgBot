@@ -53,7 +53,7 @@ jobs:
             echo "debug=${{ github.event.inputs.debug }}" >> $GITHUB_OUTPUT
           else
             # Scheduled run = send messages
-            echo "max=20" >> $GITHUB_OUTPUT
+            echo "max=30" >> $GITHUB_OUTPUT
             echo "debug=false" >> $GITHUB_OUTPUT
           fi
 
