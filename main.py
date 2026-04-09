@@ -23,8 +23,8 @@ from core.browser import BrowserManager
 from core.login import LoginManager
 from core.sheets import SheetsManager
 
-import modes.message as message_mode
-import modes.inbox   as inbox_mode
+import modes.message  as message_mode
+import modes.messages as messages_mode
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -37,7 +37,7 @@ def _build_parser():
         description=f"DD-Msg-Bot V{Config.VERSION} — DamaDam.pk automation",
     )
     p.add_argument("mode", nargs="?",
-                   choices=["msg", "inbox", "setup"],
+                   choices=["msg", "messages", "setup"],
                    help="Mode to run (omit for interactive menu)")
     p.add_argument("--max",      dest="max_items", type=int, default=0,
                    metavar="N", help="Max items to process (0=unlimited)")
@@ -115,8 +115,8 @@ def _run_with_browser(mode: str, max_n: int) -> None:
 
         if mode == "msg":
             message_mode.run(driver, sheets, logger, max_targets=max_n)
-        elif mode == "inbox":
-            inbox_mode.run(driver, sheets, logger)
+        elif mode == "messages":
+            messages_mode.run(driver, sheets, logger)
 
     finally:
         bm.close()
