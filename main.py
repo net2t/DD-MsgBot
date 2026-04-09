@@ -68,7 +68,7 @@ def _menu() -> tuple:
     print(_MENU)
     while True:
         raw = input("  Choice: ").strip()
-        mode_map = {"1": "msg", "2": "inbox", "3": "setup", "0": None}
+        mode_map = {"1": "msg", "2": "messages", "3": "setup", "0": None}
         if raw not in mode_map:
             print("  Enter 1, 2, 3, or 0.\n")
             continue
@@ -79,7 +79,7 @@ def _menu() -> tuple:
             sys.exit(0)
 
         max_items = 0
-        if mode in ("msg",):
+        if mode in ("msg", "messages"):
             lim = input("  Max items (Enter = unlimited): ").strip()
             if lim.isdigit():
                 max_items = int(lim)
