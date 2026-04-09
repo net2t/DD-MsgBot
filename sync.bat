@@ -1,20 +1,10 @@
 @echo off
-echo DD-Msg-Bot V4.1.0 - Sync & Push Script
-echo =====================================
-
+echo DD-Msg-Bot V5.1 - Sync ^& Push
+echo ================================
 echo.
-echo Adding all changes to git...
 git add .
-
-echo.
-echo Committing changes...
-git commit -m "Update DD-Msg-Bot V4.1.0 - Unified Message System"
-
-echo.
-echo Pushing to remote repository...
+git commit -m "DD-Msg-Bot V5.1 - Inbox + Activity fix, 2 workflows"
 git push
-
 echo.
-echo Sync complete! Your changes are now pushed to GitHub.
-echo.
+echo Done! Pushed to GitHub.
 pause

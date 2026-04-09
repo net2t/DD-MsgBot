@@ -1,234 +1,267 @@
-# DD-Msg-Bot V4.1 — Unified Message Version
+# DD-Msg-Bot V5.1 — DamaDam.pk Automation
 
-A streamlined Python bot for DamaDam.pk featuring unified message management: combines inbox and activity into one comprehensive system with date-organized logging and person record ID tracking.
-
----
-
-## Features
-
-- **Message Mode**: Send personalized messages to users via nicknames or direct post URLs
-- **Messages Mode**: Unified inbox + activity management with date-organized logging
+Streamlined Python bot for DamaDam.pk with 2 core modes and 4 Google Sheets.
 
 ---
 
-## Key Improvements in V4.1
+## Modes
 
-- **Unified Message System**: Merged inbox and activity into single comprehensive mode
-- **Date-Organized Logging**: All messages organized by date for better tracking
-- **Person Record ID**: Unique identifiers for each person (TID_NICK format)
-- **Streamlined Sheets**: Reduced sheet count while maintaining full functionality
-- **Enhanced Performance**: Optimized for faster execution and cleaner data organization
-- **Simplified Interface**: Only 2 core modes for focused functionality
+| Mode | Kaam |
+|------|------|
+| **msg** | MsgQue sheet se targets padhta hai, post pe reply bhejta hai |
+| **inbox** | Inbox sync karta hai + activity log karta hai + pending replies bhejta hai |
+| **setup** | 4 sheets create/recreate karta hai (fresh start) |
 
 ---
 
 ## Quick Start (Local)
 
-### 1. Install dependencies
-
+### 1. Dependencies install karo
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Google Sheets setup
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a project → Enable **Google Sheets API** and **Google Drive API**
-3. Create a **Service Account** → download key as `credentials.json`
-4. Share your Google Sheet with the service account email (Editor access)
-
-### 3. Create `.env`
-
+### 2. `.env` file banao
 ```bash
 cp .env.sample .env
 # Fill in your values
 ```
 
 Minimum required:
-
 ```env
-DD_LOGIN_EMAIL=your_damadam_username
+DD_LOGIN_EMAIL=your_damadam_nick
 DD_LOGIN_PASS=your_password
 DD_SHEET_ID=your_google_sheet_id
 CREDENTIALS_FILE=credentials.json
 ```
 
-### 4. Create sheets
+### 3. Google Sheets setup
+1. [Google Cloud Console](https://console.cloud.google.com/) mein project banao
+2. **Google Sheets API** + **Google Drive API** enable karo
+3. **Service Account** banao → key download karo as `credentials.json`
+4. Apni Google Sheet service account email ke saath share karo (Editor access)
 
+### 4. Sheets create karo
 ```bash
 python main.py setup
 ```
 
-### 5. Run (interactive menu)
-
+### 5. Run karo (interactive menu)
 ```bash
 python main.py
 ```
 
-Running with no arguments shows a numbered menu — no flags needed.
-
 ---
 
-## CLI Usage (Direct / GitHub Actions)
-
-```bash
-python main.py <mode> [--max N] [--debug] [--headless]
+## Menu
 ```
-
-| Argument | Description |
-|----------|--------------|
-| `mode` | One of: `msg messages setup` |
-| `--max N` | Process only N items (default: 0 = unlimited) |
-| `--debug` | Verbose debug output |
-| `--headless` | Force headless browser (auto-enabled in CI) |
-
-**Examples:**
-
-```bash
-python main.py msg --max 5          # Send to 5 targets only
-python main.py messages             # Unified inbox + activity management
-python main.py setup                # Create/initialize sheets
+  ╔══════════════════════════════════════════════╗
+  ║      DD-Msg-Bot V5.1  —  DamaDam.pk         ║
+  ╠══════════════════════════════════════════════╣
+  ║                                              ║
+  ║   1.  Send Messages  (MsgQue targets)        ║
+  ║   2.  Inbox Sync     (Inbox + Activity)      ║
+  ║   3.  Setup Sheets   (Create / Recreate)     ║
+  ║                                              ║
+  ║   0.  Exit                                   ║
+  ╚══════════════════════════════════════════════╝
 ```
 
 ---
 
-## GitHub Actions
+## CLI Usage
+```bash
+python main.py msg             # Message mode (unlimited)
+python main.py msg --max 5     # Send to max 5 targets only
+python main.py inbox           # Inbox sync + activity + replies
+python main.py setup           # Create/recreate sheets
+python main.py msg --debug     # Verbose logging
+```
 
-A single workflow file (`.github/workflows/bot.yml`) handles all 5 scheduled runs:
+---
 
-| Mode | Schedule |
-|------|----------|
-| 🎀 Rekhta | Every 1 hour |
-| 🎀 Message | Once a day (06:00 PKT) |
-| 🎀 Post | Every 2 hours |
-| 🎀 Inbox | Every 15 minutes |
-| 🎀 Activity | Every 18 minutes |
+## Sheet Structure (4 sheets)
 
-**Manual run:** Go to **Actions → DD-Msg-Bot → Run workflow** and pick any mode from the dropdown.
+### 1. MsgQue — Outbound message targets
+Aap fill karo, bot bhejta hai.
 
-### Required GitHub Secrets
+| Col | Name | Description |
+|-----|------|-------------|
+| A | MODE | Nick ya URL |
+| B | NAME | Display name (aapka reference) |
+| C | NICK | DamaDam username ya profile URL |
+| D | CITY | **VLOOKUP formula** (bot kabhi nahi likhta) |
+| E | POSTS | **VLOOKUP formula** (bot kabhi nahi likhta) |
+| F | FOLLOWERS | **VLOOKUP formula** (bot kabhi nahi likhta) |
+| G | GENDER | **VLOOKUP formula** (bot kabhi nahi likhta) |
+| H | MESSAGE | Message template (`{{name}}`, `{{city}}` etc.) |
+| I | STATUS | `Pending` → `Done` / `Skipped` / `Failed` |
+| J | NOTES | Bot likhta hai reason + timestamp |
+| K | RESULT | Post URL jahan message bheja |
+| L | SENT_MSG | Actual resolved message text |
 
+**VLOOKUP formulas (D, E, F, G columns — row 3 se shuru karo):**
+```
+D3 (CITY):      =IFERROR(VLOOKUP(C3,IMPORTRANGE("SHEET_ID","Profiles!B:K"),3,FALSE),"")
+E3 (POSTS):     =IFERROR(VLOOKUP(C3,IMPORTRANGE("SHEET_ID","Profiles!B:K"),6,FALSE),"")
+F3 (FOLLOWERS): =IFERROR(VLOOKUP(C3,IMPORTRANGE("SHEET_ID","Profiles!B:K"),8,FALSE),"")
+G3 (GENDER):    =IFERROR(VLOOKUP(C3,IMPORTRANGE("SHEET_ID","Profiles!B:K"),4,FALSE),"")
+```
+
+**STATUS values:**
+- `Pending` — bot process karega
+- `Done` — message sent successfully
+- `Skipped` — 0 Posts / Must Follow First / Replies Off
+- `Failed` — unexpected error
+
+**Message templates:**
+```
+Aoa {{name}} ji, kya haal hai?
+Aoa {{name}} ({{city}}), mashAllah {{posts}} posts hain!
+```
+
+### 2. MsgLog — Sent message history
+Bot automatically fill karta hai.
+
+| Col | Name | Description |
+|-----|------|-------------|
+| A | DATE | YYYY-MM-DD |
+| B | TIMESTAMP | PKT timestamp |
+| C | NICK | Target username |
+| D | NAME | Display name |
+| E | POST_URL | Post URL |
+| F | STATUS | Sent / Failed / Skipped |
+| G | NOTES | Reason |
+| H | MESSAGE | Actual message sent |
+
+### 3. Inbox — Inbox sync queue
+**One row per NICK — no duplicates.** Bot upsert karta hai (update existing ya add new).
+
+| Col | Name | Description |
+|-----|------|-------------|
+| A | NICK | DamaDam username (unique key) |
+| B | TID | DamaDam internal user ID |
+| C | TYPE | 1ON1 / POST / MEHFIL |
+| D | LAST_MSG | Last message received |
+| E | DATE | Date of last message |
+| F | TIME_STR | "2 hours ago" etc. |
+| G | MY_REPLY | **Aap yahan reply likhein** |
+| H | STATUS | New / Pending / Done / Failed |
+| I | CONV_URL | Conversation link |
+| J | UPDATED | Last sync timestamp |
+| K | NOTES | Bot notes |
+
+**Reply bhejne ka flow:**
+1. Bot sync karta hai → STATUS = `New`
+2. Aap `MY_REPLY` column mein reply likho → STATUS = `Pending`
+3. Agli baar inbox mode chalega → reply bhejega → STATUS = `Done`
+
+### 4. InboxLog — Complete history
+Append-only. Har inbox event + har activity item yahan record hota hai.
+
+| Col | Name | Description |
+|-----|------|-------------|
+| A | DATE | YYYY-MM-DD (sorting ke liye) |
+| B | TIMESTAMP | PKT timestamp |
+| C | NICK | Username |
+| D | TID | User ID |
+| E | TYPE | 1ON1 / POST / MEHFIL / ACTIVITY |
+| F | DIRECTION | IN / OUT / ACTIVITY |
+| G | MESSAGE | Message ya activity text |
+| H | CONV_URL | Conversation ya post link |
+| I | STATUS | Received / Sent / Failed / Logged |
+
+---
+
+## Message Mode — Post Selection Logic
+
+Bot sirf woh posts pick karta hai jis pe **REPLIES button** visible ho:
+- Profile page pe `a[itemprop='discussionUrl']` dhundta hai
+- Ye element sirf tab render hota hai jab replies on hain
+- Post count 0 ho → immediately skip (`0 Posts`)
+- Post pe `REPLIES OFF` → `Skipped` with note "Replies Off"
+- `FOLLOW TO REPLY` → `Skipped` with note "Must Follow First"
+
+---
+
+## Inbox Mode — How it works
+
+**Phase 1 — Inbox sync:**
+- `/inbox/` page se sab conversations parse karta hai
+- Har NICK ke liye ek row (no duplicates)
+- Existing NICK → row update, new NICK → row add
+- InboxLog mein har message append (content-based de-dup)
+
+**Phase 2 — Activity feed:**
+- `/inbox/activity/` ke sab pages (pagination support)
+- NEXT button tak chalata rehta hai
+- Har activity item: MODE | NICK | POST text | Action | Time
+- InboxLog mein append (content-based de-dup)
+
+**Phase 3 — Send replies:**
+- Inbox sheet se `STATUS=Pending` + `MY_REPLY` filled rows dhundta hai
+- `/inbox/` page pe reply form find karta hai by TID
+- SEND button (dec=1) click karta hai
+- `STATUS=Done` ya `Failed` mark karta hai
+
+---
+
+## GitHub Actions (2 Workflows)
+
+### msg.yml — Manual only
+```
+Actions → Send Messages → Run workflow
+```
+- `max_items`: Kitne messages bhejne hain (0 = unlimited)
+- `debug`: Debug logging on/off
+
+### inbox.yml — Auto (every 15 min) + Manual
+- Automatically har 15 minute mein chalta hai
+- Manual trigger bhi available
+
+### Required Secrets
 | Secret | Description |
-|--------|--------------|
-| `DD_LOGIN_EMAIL` | DamaDam username (nick) |
+|--------|-------------|
+| `DD_LOGIN_EMAIL` | DamaDam username |
 | `DD_LOGIN_PASS` | DamaDam password |
 | `DD_SHEET_ID` | Google Sheets ID |
-| `GOOGLE_CREDENTIALS_JSON` | Full contents of `credentials.json` (paste the JSON) |
-| `DD_LOGIN_EMAIL2` | *(optional)* Backup account username |
-| `DD_LOGIN_PASS2` | *(optional)* Backup account password |
-| `GEMINI_API_KEY` | *(optional)* For Urdu transliteration via Gemini API |
-
----
-
-## Sheet Structure
-
-### MsgQue
-
-Targets for Message Mode.
-
-| Column | Description |
-|--------|--------------|
-| MODE | Nick or URL |
-| NAME | Display name (your reference) |
-| NICK | DamaDam username or profile URL |
-| CITY | Scraped city (read-only) |
-| POSTS | Scraped post count (read-only) |
-| FOLLOWERS | Scraped follower count (read-only) |
-| GENDER | Scraped gender (read-only) |
-| MESSAGE | Message text — supports `{{name}}`, `{{city}}` placeholders |
-| STATUS | `Pending` → `Done` / `Skipped` / `Failed` |
-| NOTES | Set by bot after each run |
-| RESULT | URL of the post where message was sent |
-| SENT_MSG | Actual resolved message that was sent |
-
-### MessageQueue
-
-Unified message queue (replaces InboxQue). Organized by person record ID.
-
-| Column | Description |
-|--------|--------------|
-| RECORD_ID | Unique ID (TID_NICK or NOID_NICK) |
-| DATE | Date of conversation (YYYY-MM-DD) |
-| NICK | DamaDam username |
-| NAME | Display name |
-| TYPE | 1ON1 / POST / MEHFIL / UNKNOWN |
-| TID | DamaDam user ID |
-| LAST_MESSAGE | Last message received |
-| MY_REPLY | Your reply text — bot sends when STATUS=Pending |
-| STATUS | Pending → Done / Failed / NoReply |
-| UPDATED | Timestamp of last sync |
-| NOTES | Set by bot |
-
-### MessageLog
-
-Unified message log (replaces InboxLog). Organized by date with complete history.
-
-| Column | Description |
-|--------|--------------|
-| DATE | Date of message (YYYY-MM-DD) - for sorting |
-| TIMESTAMP | PKT timestamp |
-| RECORD_ID | Person record ID (TID_NICK or NOID_NICK) |
-| NICK | Username |
-| TYPE | 1ON1 / POST / MEHFIL / ACTIVITY |
-| DIRECTION | IN / OUT / ACTIVITY |
-| MESSAGE | Message text or activity description |
-| CONV_URL | Link to conversation or post |
-| STATUS | Received / Sent / Failed / Logged |
-
-### Other Sheets
-
-- **MsgLog**: History of all sent messages
-- **PostQue**: Post content queue (if using post mode)
-- **PostLog**: History of created posts
-- **Logs**: Master activity log
-- **ScrapeState**: Pagination cursors
-- **Dashboard**: Summary/analysis (formulas only)
+| `GOOGLE_CREDENTIALS_JSON` | credentials.json ka poora content |
+| `DD_LOGIN_EMAIL2` | (optional) Backup account |
+| `DD_LOGIN_PASS2` | (optional) Backup password |
 
 ---
 
 ## File Structure
-
 ```
 DD-Msg-Bot/
-├── main.py                  ← Entry point + interactive menu
-├── config.py                ← All settings (env vars + sheet/column definitions)
-├── requirements.txt
-├── .env                     ← Your credentials (gitignored)
-├── .env.sample              ← Template — copy to .env
-├── credentials.json         ← Google service account key (gitignored)
+├── main.py              ← Entry point + interactive menu
+├── config.py            ← All settings + sheet/column definitions
+├── requirements.txt     ← Python dependencies
+├── .env                 ← Your credentials (gitignored)
+├── .env.sample          ← Template
+├── credentials.json     ← Google service account key (gitignored)
 ├── core/
-│   ├── browser.py           ← Chrome setup
-│   ├── login.py             ← Cookie → primary → backup login chain
-│   └── sheets.py            ← All Google Sheets operations
+│   ├── browser.py       ← Chrome setup + cookie handling
+│   ├── login.py         ← Login: cookie → primary → backup
+│   └── sheets.py        ← Google Sheets read/write operations
 ├── modes/
-│   ├── message.py           ← Message Mode
-│   ├── post.py              ← Post Mode (cooldown + duplicate detection)
-│   ├── rekhta.py            ← Rekhta scraper
-│   ├── inbox.py             ← Inbox + Activity modes
-│   ├── logs.py              ← Log viewer
-│   └── setup.py             ← Sheet setup + formatting
+│   ├── message.py       ← Message Mode (send to profile posts)
+│   ├── inbox.py         ← Inbox Mode (sync + activity + replies)
+│   └── setup.py         ← Sheet creation + formatting
 ├── utils/
-│   ├── logger.py            ← Console + file logging (PKT timestamps)
-│   └── helpers.py           ← Image download, caption sanitization, URL helpers
+│   ├── logger.py        ← Console + file logging (PKT timestamps)
+│   └── helpers.py       ← URL helpers, text sanitization
 ├── .github/
 │   └── workflows/
-│       └── bot.yml          ← Single workflow: all 5 schedules + manual trigger
-└── logs/                    ← Auto-created log files (gitignored)
+│       ├── msg.yml      ← Message workflow (manual only)
+│       └── inbox.yml    ← Inbox workflow (every 15 min + manual)
+└── logs/                ← Auto-created log files (gitignored)
 ```
-
----
-
-## Post Mode Rules
-
-- **Cooldown:** Minimum 135 seconds between posts (DamaDam rate limit)
-- **Duplicate images:** If `IMG_LINK` was already posted → mark `Repeating`, skip, never retry
-- **Rate limit hit:** Wait the required time → retry once only
-- **Any other error:** Mark `Failed`, move on — never retry automatically
 
 ---
 
 ## Notes
-
-- All timestamps are **Pakistan Standard Time (PKT, UTC+5)**
-- Bot never overwrites the read-only reference columns in MsgList (CITY, POSTS, FOLLOWERS, GENDER)
-- `damadam_cookies.pkl` stores session cookies for faster login — gitignored
-- Log files are written to `logs/` — one file per mode per day
+- Sab timestamps **Pakistan Standard Time (PKT, UTC+5)**
+- VLOOKUP cols (D, E, F, G) mein bot kabhi nahi likhta — aap manually formulas daalo
+- `damadam_cookies.pkl` — session cookies store, gitignored
+- Logs: `logs/` folder mein, ek file per mode per day
