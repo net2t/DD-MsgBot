@@ -104,85 +104,119 @@ def _fetch_inbox(driver, logger: Logger, sheets: SheetsManager, max_items: int =
     """Fetch DamaDam inbox conversations from /inbox/."""
     items: List[Dict] = []
     seen: set = set()
+    page_num = 1
 
     try:
-        driver.get(_URL_INBOX)
-        time.sleep(3)
+        while len(items) < max_items:
+            # Navigate to inbox page with pagination
+            url = _URL_INBOX if page_num == 1 else f"{_URL_INBOX}?page={page_num}"
+            driver.get(url)
+            time.sleep(3)
 
-        blocks = driver.find_elements(By.CSS_SELECTOR, _SEL_ITEM_BLOCK)
-        
-        for block in blocks[:max_items]:
-            try:
-                # Extract conversation ID
-                tid = ""
+            blocks = driver.find_elements(By.CSS_SELECTOR, _SEL_ITEM_BLOCK)
+            
+            # If no blocks found, we've reached the end
+            if not blocks:
+                logger.info(f"No more conversations found on page {page_num}")
+                break
+            
+            page_items = 0
+            for block in blocks:
+                if len(items) >= max_items:
+                    break
+                    
                 try:
-                    btn = block.find_element(By.CSS_SELECTOR, _SEL_TID_BTN)
-                    tid = (btn.get_attribute("value") or "").strip()
-                except Exception:
-                    pass
+                    # Extract conversation ID
+                    tid = ""
+                    try:
+                        btn = block.find_element(By.CSS_SELECTOR, _SEL_TID_BTN)
+                        tid = (btn.get_attribute("value") or "").strip()
+                    except Exception:
+                        pass
 
-                # Extract nickname
-                nick = ""
-                try:
-                    nick_el = block.find_element(By.CSS_SELECTOR, _SEL_NICK_BDI)
-                    nick = nick_el.text.strip()
-                except Exception:
-                    pass
+                    # Extract nickname
+                    nick = ""
+                    try:
+                        nick_el = block.find_element(By.CSS_SELECTOR, _SEL_NICK_BDI)
+                        nick = nick_el.text.strip()
+                    except Exception:
+                        pass
 
-                # Extract conversation type
-                conv_type = "UNKNOWN"
-                try:
-                    type_spans = block.find_elements(By.CSS_SELECTOR, _SEL_TYPE_SPAN)
-                    if type_spans:
-                        raw = type_spans[0].text.strip().upper()
-                        if "1" in raw and "ON" in raw:
-                            conv_type = "1ON1"
-                        elif "POST" in raw:
-                            conv_type = "POST"
-                        elif "MEHFIL" in raw:
-                            conv_type = "MEHFIL"
-                except Exception:
-                    pass
+                    # Skip empty records (pagination entries)
+                    if not nick or not nick.strip():
+                        continue
+                        
+                    # Extract conversation type
+                    conv_type = "UNKNOWN"
+                    try:
+                        type_spans = block.find_elements(By.CSS_SELECTOR, _SEL_TYPE_SPAN)
+                        if type_spans:
+                            raw = type_spans[0].text.strip().upper()
+                            if "1" in raw and "ON" in raw:
+                                conv_type = "1ON1"
+                            elif "POST" in raw:
+                                conv_type = "POST"
+                            elif "MEHFIL" in raw:
+                                conv_type = "MEHFIL"
+                    except Exception:
+                        pass
 
-                # Extract message preview
-                msg_preview = ""
-                try:
-                    msg_el = block.find_element(By.CSS_SELECTOR, _SEL_MSG_SPAN)
-                    msg_preview = msg_el.text.strip()
-                except Exception:
-                    pass
+                    # Extract message preview
+                    msg_preview = ""
+                    try:
+                        msg_el = block.find_element(By.CSS_SELECTOR, _SEL_MSG_SPAN)
+                        msg_preview = msg_el.text.strip()
+                    except Exception:
+                        pass
 
-                # Extract timestamp
-                timestamp = ""
-                try:
-                    time_el = block.find_element(By.CSS_SELECTOR, _SEL_TIME_SPAN)
-                    timestamp = time_el.text.strip()
-                except Exception:
-                    pass
+                    # Extract timestamp
+                    timestamp = ""
+                    try:
+                        time_el = block.find_element(By.CSS_SELECTOR, _SEL_TIME_SPAN)
+                        timestamp = time_el.text.strip()
+                    except Exception:
+                        pass
 
-                # Create unique identifier
-                record_id = f"{tid}_{nick}" if tid else f"NOID_{nick}"
-                if record_id in seen:
+                    # Create unique identifier
+                    record_id = f"{tid}_{nick}" if tid else f"NOID_{nick}"
+                    
+                    # Skip if already seen
+                    if record_id in seen:
+                        continue
+                    seen.add(record_id)
+
+                    items.append({
+                        "record_id": record_id,
+                        "tid": tid,
+                        "nick": nick,
+                        "type": conv_type,
+                        "message": msg_preview,
+                        "timestamp": timestamp,
+                        "url": url
+                    })
+                    page_items += 1
+
+                except Exception as e:
+                    logger.info(f"Error processing inbox block: {e}")
                     continue
-                seen.add(record_id)
-
-                items.append({
-                    "record_id": record_id,
-                    "tid": tid,
-                    "nick": nick,
-                    "type": conv_type,
-                    "message": msg_preview,
-                    "timestamp": timestamp,
-                    "url": _URL_INBOX
-                })
-
-            except Exception as e:
-                logger.info(f"Error processing inbox block: {e}")
-                continue
+            
+            # If no valid items on this page, stop pagination
+            if page_items == 0:
+                logger.info(f"No valid conversations found on page {page_num}, stopping pagination")
+                break
+                
+            logger.info(f"Page {page_num}: Found {page_items} valid conversations")
+            page_num += 1
+            
+            # Safety limit to prevent infinite pagination
+            if page_num > 10:
+                logger.info("Reached pagination safety limit (10 pages)")
+                break
 
     except Exception as e:
         logger.error(f"Error fetching inbox: {e}")
 
+    logger.info(f"Total conversations found: {len(items)} across {page_num-1} pages")
     return items
 
 
