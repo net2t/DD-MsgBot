@@ -15,8 +15,8 @@ on:
         type: boolean
 
   # ── Scheduled: Send messages every 2 hours ────────────────────────────────
-  schedule:
-    - cron: '0 */2 * * *'   # every 2 hours — send messages
+  #schedule:
+  #  - cron: '0 */0 * * *'   # every 2 hours — send messages
 
 permissions:
   contents: read
